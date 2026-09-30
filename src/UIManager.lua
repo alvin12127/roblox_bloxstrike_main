@@ -198,6 +198,9 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         return Config.HITSOUND_ASSET_ID or ""
     end
 
+    -- pending rebuild used by the volume slider
+    local hitSoundVolumeTask = nil
+
     local hitSoundValues = (HitSound and HitSound.getLabels) and HitSound.getLabels() or {}
     table.insert(hitSoundValues, CUSTOM_SOUND)
 
@@ -254,7 +257,15 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         Suffix = "%",
         Callback = function(Value)
             updateSetting("HITSOUND_VOLUME", Value)
-            if HitSound and HitSound.setVolume then HitSound.setVolume(Value / 100) end
+            if HitSound then HitSound.setVolume((tonumber(Value) or 0) / 100) end
+
+            -- rebuild once the drag settles, so stale instances cannot keep an
+            -- older level
+            if hitSoundVolumeTask then task.cancel(hitSoundVolumeTask) end
+            hitSoundVolumeTask = task.delay(0.4, function()
+                hitSoundVolumeTask = nil
+                if HitSound and HitSound.build then HitSound.build(Config) end
+            end)
         end
     })
 
@@ -378,6 +389,24 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         Tooltip = "Renders 3D bone skeletons and health bars on characters",
         Callback = function(Value)
             updateSetting("SKELETON_ENABLED", Value)
+        end
+    })
+
+    EspMain:AddToggle("NameEsp", {
+        Text = "Name ESP",
+        Default = (Config.NAME_ESP_ENABLED ~= false),
+        Tooltip = "Player name rendered above the skeleton",
+        Callback = function(Value)
+            updateSetting("NAME_ESP_ENABLED", Value)
+        end
+    })
+
+    EspMain:AddToggle("ItemEsp", {
+        Text = "Equipped item ESP",
+        Default = (Config.ITEM_ESP_ENABLED ~= false),
+        Tooltip = "Currently held weapon rendered below the skeleton",
+        Callback = function(Value)
+            updateSetting("ITEM_ESP_ENABLED", Value)
         end
     })
 
@@ -663,6 +692,8 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
 
             if Toggles.EspMaster then Toggles.EspMaster:SetValue(Config.ESP_ENABLED) end
             if Toggles.SkeletonEsp then Toggles.SkeletonEsp:SetValue(Config.SKELETON_ENABLED) end
+            if Toggles.NameEsp then Toggles.NameEsp:SetValue(Config.NAME_ESP_ENABLED ~= false) end
+            if Toggles.ItemEsp then Toggles.ItemEsp:SetValue(Config.ITEM_ESP_ENABLED ~= false) end
             if Toggles.ViewAngle then Toggles.ViewAngle:SetValue(Config.VIEWANGLE_ENABLED) end
             if Toggles.OffscreenArrows then Toggles.OffscreenArrows:SetValue(Config.OFFSCREEN_ARROWS) end
             if Toggles.TargetPartHl then Toggles.TargetPartHl:SetValue(Config.BODYPART_TARGET_HL) end

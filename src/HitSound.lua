@@ -6,6 +6,10 @@
 
 local SoundService = game:GetService("SoundService")
 local ContentProvider = game:GetService("ContentProvider")
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
 
 local HitSound = {
     Initialized = false,
@@ -14,6 +18,7 @@ local HitSound = {
     PoolSize = 8,
     CurrentAsset = nil,
     Volume = 0.7,
+    LastPlayed = {},
 
     -- selectable sounds. 'file' is only used for locals that are converted with
     -- getcustomasset, everything else plays straight from its Roblox asset id.
@@ -315,8 +320,17 @@ function HitSound.isReady()
     return #HitSound.Sounds > 0
 end
 
-function HitSound.play()
+-- `source` is optional and only used to suppress a duplicate trigger for the
+-- same character (the raycast hit and the damage confirmation both fire)
+function HitSound.play(source)
     if #HitSound.Sounds == 0 then return end
+
+    local now = os.clock()
+    if source then
+        local previous = HitSound.LastPlayed[source]
+        if previous and (now - previous) < 0.1 then return end
+        HitSound.LastPlayed[source] = now
+    end
 
     HitSound.PoolIndex = (HitSound.PoolIndex % #HitSound.Sounds) + 1
     local sound = HitSound.Sounds[HitSound.PoolIndex]
@@ -327,6 +341,137 @@ function HitSound.play()
         sound.Volume = HitSound.Volume
         sound:Play()
     end)
+end
+
+----------------------------------------------------------------------
+-- damage confirmation
+--
+-- Wallbang never shows up in the raycast result because it rewrites the
+-- network packet instead, so wall hits can only be confirmed through health
+-- loss. To make sure we never react to somebody else's damage, a health drop
+-- only counts when it lands on the character we were aiming at, within a short
+-- window after one of our own shots.
+----------------------------------------------------------------------
+
+local DAMAGE_WINDOW = 0.35      -- max delay between our shot and the health drop
+local UNLOCKED_WINDOW = 0.12    -- tighter when we had no locked target
+
+local Utils = nil
+local storedConfig = nil
+local lastShot = nil            -- { time = os.clock(), char = <model> }
+local lastHealth = {}           -- model -> last known health
+local watching = {}             -- model -> true
+local damageConnections = {}
+
+-- called every time one of our bullets is fired
+function HitSound.setShot(targetChar)
+    lastShot = { time = os.clock(), char = targetChar }
+end
+
+local function isEnemyCharacter(char)
+    if not char or not char.Parent then return false end
+    if char.Name == LocalPlayer.Name then return false end
+    if char:GetAttribute("Dead") == true then return false end
+
+    if Utils and Utils.isEnemy then
+        local player = Players:FindFirstChild(char.Name)
+        local ok, isEnemy = pcall(Utils.isEnemy, player, char)
+        if ok and isEnemy == false then
+            return false
+        end
+    end
+
+    return true
+end
+
+-- only damage we caused may trigger a sound
+local function isOurDamage(char)
+    if not lastShot then return false end
+
+    local elapsed = os.clock() - lastShot.time
+    if elapsed > DAMAGE_WINDOW then return false end
+
+    if lastShot.char then
+        return char == lastShot.char
+    end
+
+    -- no locked target: accept only a very recent drop
+    return elapsed <= UNLOCKED_WINDOW
+end
+
+local function evaluateHealth(char)
+    if not storedConfig or storedConfig.HITSOUND_ENABLED ~= true then return end
+    if not Utils or not Utils.getCharacterHealth then return end
+    if not isEnemyCharacter(char) then
+        lastHealth[char] = Utils.getCharacterHealth(char)
+        return
+    end
+
+    local hp = Utils.getCharacterHealth(char)
+    if type(hp) ~= "number" then return end
+
+    local previous = lastHealth[char]
+    lastHealth[char] = hp
+
+    -- first sighting or healing, not damage
+    if previous == nil or hp >= previous then return end
+
+    if not isOurDamage(char) then return end
+
+    HitSound.play(char)
+end
+
+local function watchCharacter(char)
+    if watching[char] then return end
+    watching[char] = true
+
+    pcall(function()
+        local signal = char:GetAttributeChangedSignal("Health")
+        table.insert(damageConnections, signal:Connect(function()
+            pcall(evaluateHealth, char)
+        end))
+    end)
+
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        table.insert(damageConnections, humanoid.HealthChanged:Connect(function()
+            pcall(evaluateHealth, char)
+        end))
+    end
+end
+
+function HitSound.startDamageWatch()
+    local charsFolder = Workspace:FindFirstChild("Characters")
+    if not charsFolder then return end
+
+    for _, child in ipairs(charsFolder:GetChildren()) do
+        if child:IsA("Model") then
+            lastHealth[child] = (Utils and Utils.getCharacterHealth(child)) or nil
+            watchCharacter(child)
+        end
+    end
+
+    table.insert(damageConnections, charsFolder.ChildAdded:Connect(function(child)
+        if child:IsA("Model") then
+            lastHealth[child] = (Utils and Utils.getCharacterHealth(child)) or nil
+            watchCharacter(child)
+        end
+    end))
+
+    table.insert(damageConnections, charsFolder.ChildRemoved:Connect(function(child)
+        watching[child] = nil
+        lastHealth[child] = nil
+    end))
+end
+
+function HitSound.stopDamageWatch()
+    for _, connection in ipairs(damageConnections) do
+        pcall(function() connection:Disconnect() end)
+    end
+    damageConnections = {}
+    watching = {}
+    lastHealth = {}
+    lastShot = nil
 end
 
 -- called on every confirmed hit, respects the master toggle
@@ -340,18 +485,27 @@ function HitSound.refresh(Config)
     return HitSound.build(Config)
 end
 
-function HitSound.init(Config)
+function HitSound.init(Config, UtilsModule)
     if HitSound.Initialized then return end
     HitSound.Initialized = true
+
+    storedConfig = Config
+    Utils = UtilsModule
+
     HitSound.setVolume((tonumber(Config.HITSOUND_VOLUME) or 70) / 100)
     HitSound.ensureDefaults(Config)
     HitSound.build(Config)
+    HitSound.startDamageWatch()
 end
 
 function HitSound.cleanup()
+    HitSound.stopDamageWatch()
     HitSound.destroyPool()
+    HitSound.LastPlayed = {}
     HitSound.CurrentAsset = nil
     HitSound.Initialized = false
+    storedConfig = nil
+    Utils = nil
 end
 
 return HitSound

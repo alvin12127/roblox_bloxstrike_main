@@ -156,8 +156,14 @@ function SilentAim.init(Config, Utils, HitSound)
 
         local okChar, char = pcall(resolveEnemyCharacter, hitPart, Utils)
         if okChar and char then
-            HitSound.play()
+            HitSound.play(char)
         end
+    end
+
+    local recordShot = function()
+        if not HitSound then return end
+        if type(HitSound.setShot) ~= "function" then return end
+        HitSound.setShot(Config.CurrentTargetChar)
     end
 
     if not _G.__originalPerformRaycast then
@@ -166,6 +172,8 @@ function SilentAim.init(Config, Utils, HitSound)
 
     -- bullet raycast redirection
     local function silentAimPerformRaycast(self, spread)
+        recordShot()
+
         local aimActive = (type(Config.isSilentAimActive) == "function") and Config.isSilentAimActive() or (Config.SILENT_AIM_ENABLED ~= false)
         local targetPart = Config.CurrentTargetPart
         local active = aimActive and rollHitChance(Config)

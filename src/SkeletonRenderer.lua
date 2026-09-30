@@ -1,9 +1,83 @@
 -- skeleton and esp renderer
 local Workspace = game:GetService("Workspace")
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
 local Camera = Workspace.CurrentCamera
 local EPS = 0.01
 
 local SkeletonRenderer = {}
+
+local BODY_PARTS = {
+    Head = true, UpperTorso = true, LowerTorso = true, Torso = true,
+    HumanoidRootPart = true, LeftUpperArm = true, LeftLowerArm = true, LeftHand = true,
+    RightUpperArm = true, RightLowerArm = true, RightHand = true,
+    LeftUpperLeg = true, LeftLowerLeg = true, LeftFoot = true,
+    RightUpperLeg = true, RightLowerLeg = true, RightFoot = true
+}
+
+-- the equipped weapon lives on the player as a json encoded "CurrentEquipped"
+-- attribute, same shape the damage engine already parses for the local player
+local function readAttributeName(player, attributeName)
+    local attr = player:GetAttribute(attributeName)
+    if attr == nil then return nil end
+
+    if typeof(attr) == "string" then
+        local ok, parsed = pcall(HttpService.JSONDecode, HttpService, attr)
+        if ok and type(parsed) == "table" and type(parsed.Name) == "string" then
+            return parsed.Name
+        end
+        return nil
+    end
+
+    if typeof(attr) == "table" and attr.Name then
+        return tostring(attr.Name)
+    end
+
+    return nil
+end
+
+-- falls back to whatever non-body model is attached to the rig
+local function scanRigForItem(char)
+    for _, child in ipairs(char:GetChildren()) do
+        local isItem = child:IsA("Tool") or child:IsA("Model")
+        if isItem and not BODY_PARTS[child.Name] then
+            return child.Name
+        end
+    end
+    return nil
+end
+
+-- decoded item names are cached per player so the json parse does not run
+-- every frame for every enemy (weak keys so dropped players are collected)
+local itemCache = setmetatable({}, { __mode = "k" })
+
+local function getEquippedItem(char)
+    local player = Players:FindFirstChild(char.Name)
+
+    if player then
+        local raw = player:GetAttribute("CurrentEquipped")
+
+        if raw ~= nil then
+            local entry = itemCache[player]
+
+            if (not entry) or entry.raw ~= raw then
+                entry = { raw = raw, name = readAttributeName(player, "CurrentEquipped") }
+                itemCache[player] = entry
+            end
+
+            if entry.name and entry.name ~= "" then
+                return entry.name
+            end
+        end
+
+        local fallback = readAttributeName(player, "CurrentWeapon") or readAttributeName(player, "Equipped")
+        if fallback and fallback ~= "" then
+            return fallback
+        end
+    end
+
+    return scanRigForItem(char)
+end
 
 -- r15 bone pairs
 local BONE_PAIRS = {
@@ -30,6 +104,7 @@ function SkeletonRenderer.create()
         HpBg = Drawing.new("Line"),
         HpFill = Drawing.new("Line"),
         NameText = Drawing.new("Text"),
+        ItemText = Drawing.new("Text"),
         Arrow = Drawing.new("Triangle")
     }
 
@@ -62,6 +137,13 @@ function SkeletonRenderer.create()
     obj.NameText.ZIndex = 3
     obj.NameText.Visible = false
 
+    obj.ItemText.Size = 12
+    obj.ItemText.Center = true
+    obj.ItemText.Outline = false
+    obj.ItemText.Color = Color3.fromRGB(200, 200, 210)
+    obj.ItemText.ZIndex = 3
+    obj.ItemText.Visible = false
+
     obj.Arrow.Filled = true
     obj.Arrow.Thickness = 1
     obj.Arrow.ZIndex = 5
@@ -78,6 +160,7 @@ function SkeletonRenderer.hide(drawObj)
     drawObj.HpBg.Visible = false
     drawObj.HpFill.Visible = false
     if drawObj.NameText then drawObj.NameText.Visible = false end
+    if drawObj.ItemText then drawObj.ItemText.Visible = false end
     if drawObj.Arrow then drawObj.Arrow.Visible = false end
 end
 
@@ -89,6 +172,7 @@ function SkeletonRenderer.destroy(drawObj)
     pcall(function() drawObj.HpBg:Remove() end)
     pcall(function() drawObj.HpFill:Remove() end)
     if drawObj.NameText then pcall(function() drawObj.NameText:Remove() end) end
+    if drawObj.ItemText then pcall(function() drawObj.ItemText:Remove() end) end
     if drawObj.Arrow then pcall(function() drawObj.Arrow:Remove() end) end
 end
 
@@ -232,20 +316,40 @@ function SkeletonRenderer.render(drawObj, char, health, maxHealth, boneColor, ba
         drawObj.HpFill.Color = Color3.fromHSV(0.33 * fraction, 1, 1)
         drawObj.HpFill.Visible = true
 
-        -- name tag
+        local midX = (minX + maxX) * 0.5
+
+        -- name tag sits above the skeleton
         if drawObj.NameText then
-            local midX = (minX + maxX) * 0.5
-            local nameY = maxY + 4
-            drawObj.NameText.Text = char.Name
-            drawObj.NameText.Position = Vector2.new(midX, nameY)
-            drawObj.NameText.Color = boneColor
-            drawObj.NameText.Outline = false
-            drawObj.NameText.Visible = true
+            local showName = (not Config or Config.NAME_ESP_ENABLED ~= false)
+            drawObj.NameText.Visible = showName
+
+            if showName then
+                drawObj.NameText.Text = char.Name
+                drawObj.NameText.Position = Vector2.new(midX, minY - 18)
+                drawObj.NameText.Color = boneColor
+                drawObj.NameText.Outline = false
+            end
+        end
+
+        -- equipped weapon takes the slot under the skeleton
+        if drawObj.ItemText then
+            local showItem = (not Config or Config.ITEM_ESP_ENABLED ~= false)
+            local itemName = showItem and getEquippedItem(char) or nil
+
+            drawObj.ItemText.Visible = (itemName ~= nil)
+
+            if itemName then
+                drawObj.ItemText.Text = itemName
+                drawObj.ItemText.Position = Vector2.new(midX, maxY + 5)
+                drawObj.ItemText.Color = boneColor
+                drawObj.ItemText.Outline = false
+            end
         end
     else
         drawObj.HpBg.Visible = false
         drawObj.HpFill.Visible = false
         if drawObj.NameText then drawObj.NameText.Visible = false end
+        if drawObj.ItemText then drawObj.ItemText.Visible = false end
     end
 
     -- offscreen arrow
