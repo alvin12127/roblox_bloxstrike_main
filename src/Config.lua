@@ -220,6 +220,19 @@ pcall(function()
     InputController = require(game:GetService("ReplicatedStorage").Controllers.InputController)
 end)
 
+-- MB1/MB2/MB3 are UserInputType values, looking them up in Enum.KeyCode throws
+local MOUSE_KEYS = { MB1 = true, MB2 = true, MB3 = true }
+
+local function safeKeyCode(name)
+    if type(name) ~= "string" then return nil end
+    if MOUSE_KEYS[name] then return nil end
+
+    local ok, keyCode = pcall(function() return Enum.KeyCode[name] end)
+    if ok and keyCode then return keyCode end
+
+    return nil
+end
+
 -- aim key held check
 function Config.isAimKeyHeld()
     local key = Config.TOGGLE_AIM_KEY
@@ -251,7 +264,7 @@ function Config.isAimKeyHeld()
 
     -- string key name
     if type(key) == "string" then
-        local kc = Enum.KeyCode[key]
+        local kc = safeKeyCode(key)
         if kc and UserInputService:IsKeyDown(kc) then
             return true
         end
@@ -262,7 +275,7 @@ function Config.isAimKeyHeld()
 
     -- InputController actions
     if InputController then
-        local targetKc = (typeof(key) == "EnumItem" and key.EnumType == Enum.KeyCode) and key or (type(key) == "string" and Enum.KeyCode[key])
+        local targetKc = (typeof(key) == "EnumItem" and key.EnumType == Enum.KeyCode) and key or safeKeyCode(key)
         if targetKc then
             local okBind, isPressed = pcall(InputController.isBindingPressed, targetKc)
             if okBind and isPressed == true then
