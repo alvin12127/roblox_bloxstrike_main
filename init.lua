@@ -109,7 +109,7 @@ fovCircle.ZIndex = 1
 fovCircle.Visible = Config.FOV_CIRCLE_ENABLED
 
 -- init subsystems
-HitSound.init(Config)
+HitSound.init(Config, Utils)
 SilentAim.init(Config, Utils, HitSound)
 Wallbang.init(Config)
 Bhop.init(Config)
