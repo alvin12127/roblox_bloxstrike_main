@@ -56,9 +56,9 @@ local function import(moduleName)
         return res
     end
     
-    -- remote github fallback
+    -- remote github fallback (timestamped so the executor never serves a stale copy)
     local okHttp, remoteContent = pcall(function()
-        return game:HttpGet("https://raw.githubusercontent.com/alvin12127/roblox_bloxstrike_main/main/src/" .. moduleName .. ".lua")
+        return game:HttpGet("https://raw.githubusercontent.com/alvin12127/roblox_bloxstrike_main/main/src/" .. moduleName .. ".lua?t=" .. tostring(os.time()))
     end)
     if okHttp and remoteContent and #remoteContent > 0 then
         local fn, loadErr = loadstring(remoteContent)
@@ -85,6 +85,7 @@ local SpectateChecker  = import("SpectateChecker")
 local Bhop             = import("Bhop")
 local AntiFlash        = import("AntiFlash")
 local WeaponEngine     = import("WeaponEngine")
+local HitSound         = import("HitSound")
 local LinoriaLib       = import("LinoriaLib")
 local UIManager        = import("UIManager")
 
@@ -108,7 +109,8 @@ fovCircle.ZIndex = 1
 fovCircle.Visible = Config.FOV_CIRCLE_ENABLED
 
 -- init subsystems
-SilentAim.init(Config, Utils)
+HitSound.init(Config)
+SilentAim.init(Config, Utils, HitSound)
 Wallbang.init(Config)
 Bhop.init(Config)
 AntiFlash.init(Config)
@@ -124,6 +126,7 @@ local function cleanup()
     
     UIManager.cleanup()
     WeaponEngine.cleanup()
+    HitSound.cleanup()
     Bhop.cleanup()
     AntiFlash.cleanup()
     SilentAim.cleanup()
@@ -142,7 +145,7 @@ _G.__bloxstrikeJanitor = cleanup
 _G.__bloxstrikeConfig = Config
 
 -- init ui
-UIManager.init(Config, LinoriaLib, nil, WeaponEngine, cleanup)
+UIManager.init(Config, LinoriaLib, nil, WeaponEngine, cleanup, HitSound)
 
 -- auto-launch skinchanger if enabled
 if Config.AUTO_LAUNCH_SKINCHANGER == true then
