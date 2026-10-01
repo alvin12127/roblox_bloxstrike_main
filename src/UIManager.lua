@@ -1230,37 +1230,7 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
     end)
     table.insert(UIManager.Connections, bindInputBegan)
 
-    -- block in-game weapon switching while menu is open
-    pcall(function()
-        local InventoryController = require(ReplicatedStorage.Controllers.InventoryController)
-        if InventoryController then
-            if not _G.__originalInventoryEquip then
-                _G.__originalInventoryEquip = InventoryController.equip
-            end
-            local origEquip = _G.__originalInventoryEquip
-
-            if not _G.__originalInventoryEquipLocal then
-                _G.__originalInventoryEquipLocal = InventoryController.equipLocal
-            end
-            local origEquipLocal = _G.__originalInventoryEquipLocal
-
-            InventoryController.equip = function(slot, index, ...)
-                if Arvn and Arvn.Toggled then
-                    return
-                end
-                return origEquip(slot, index, ...)
-            end
-
-            if origEquipLocal then
-                InventoryController.equipLocal = function(slot, index, ...)
-                    if Arvn and Arvn.Toggled then
-                        return
-                    end
-                    return origEquipLocal(slot, index, ...)
-                end
-            end
-        end
-    end)
+    -- Note: InventoryController hooking removed - it was blocking jump input
 
     -- Show menu on startup
     if Config.MENU_OPEN ~= false then

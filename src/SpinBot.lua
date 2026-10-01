@@ -23,8 +23,12 @@ local function applyEffects()
     local config = storedConfig
     if not config then return end
 
-    local spinOn = (config.SPINBOT_ENABLED == true)
-    local antiAimOn = (config.ANTIAIM_ENABLED == true)
+    -- Default to enabled if not explicitly disabled
+    local spinOn = config.SPINBOT_ENABLED
+    if spinOn == nil then spinOn = true end
+    
+    local antiAimOn = config.ANTIAIM_ENABLED
+    if antiAimOn == nil then antiAimOn = true end
 
     if (not spinOn) and (not antiAimOn) then return end
 
