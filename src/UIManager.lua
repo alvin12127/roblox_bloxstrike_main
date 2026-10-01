@@ -809,15 +809,79 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
     })
 
     -- ==========================================
-    -- SKINS TAB
+    -- SKINS TAB (hosts the working skin catalogs with 3D previews)
     -- ==========================================
     local SkinsTab = Main:Tab({Name = "Skins", Icon = "palette"})
     local SkinsBox = SkinsTab:Section("Skin Changer")
 
+    -- Linoria compatibility shim.
+    -- The Knife / Gun / Glove catalogs call Library:Create and
+    -- Library:CreateLabel, which arvn does not implement. Without these the
+    -- catalogs cannot build their 3D cards at all.
+    if not Arvn.Create then
+        function Arvn:Create(Class, Properties)
+            local obj = Instance.new(Class)
+            if Properties then
+                for k, v in pairs(Properties) do obj[k] = v end
+            end
+            return obj
+        end
+    end
+
+    if not Arvn.CreateLabel then
+        function Arvn:CreateLabel(Properties)
+            local label = Instance.new("TextLabel")
+            label.BackgroundTransparency = 1
+            label.Font = Enum.Font.GothamMedium
+            label.TextSize = 14
+            label.TextColor3 = Arvn.FontColor or Color3.fromRGB(250, 250, 250)
+            if Properties then
+                for k, v in pairs(Properties) do label[k] = v end
+            end
+            return label
+        end
+    end
+
+    -- One enlarged label row per catalog; each becomes the TabFrame that the
+    -- catalog renders its 3D cards into.
+    local function makeHost(height)
+        local lbl = nil
+        pcall(function() lbl = SkinsBox:AddLabel("") end)
+        pcall(function()
+            if lbl and lbl.Root then
+                lbl.Root.Size = UDim2.new(1, 0, 0, height)
+            end
+        end)
+        return (lbl and lbl.Root) or nil
+    end
+
+    local function fakeTab(frame)
+        return { TabFrame = frame, LeftSide = nil, RightSide = nil }
+    end
+
+    if SkinChanger then
+        local scAPI = SkinChanger.API
+        local scConfig = SkinChanger.Config
+        local scDb = SkinChanger.Database
+
+        if SkinChanger.KnifeCatalog and SkinChanger.KnifeCatalog.init then
+            pcall(SkinChanger.KnifeCatalog.init,
+                fakeTab(makeHost(300)), scConfig, scAPI, Arvn, scDb)
+        end
+        if SkinChanger.GunCatalog and SkinChanger.GunCatalog.init then
+            pcall(SkinChanger.GunCatalog.init,
+                fakeTab(makeHost(300)), scConfig, scAPI, Arvn, scDb)
+        end
+        if SkinChanger.GloveCatalog and SkinChanger.GloveCatalog.init then
+            pcall(SkinChanger.GloveCatalog.init,
+                fakeTab(makeHost(240)), scConfig, scAPI, Arvn, scDb)
+        end
+    end
+
     SkinsBox:Button({
         Name = "Refresh Skins",
         Callback = function()
-            local sc = _G.SkinChanger
+            local sc = (SkinChanger and SkinChanger.API) or _G.SkinChanger
             if sc and sc.refresh then
                 pcall(sc.refresh)
                 Arvn:Notify({Title = "Skinchanger", Content = "Refreshed!", Kind = "Success"})

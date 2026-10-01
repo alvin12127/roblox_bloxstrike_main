@@ -248,15 +248,54 @@ end
 
 local lastDrawLog = 0
 
--- Throttled diagnostic logger. The previous one-shot flags meant the very first
--- message could be missed, after which nothing ever printed again. This emits
--- at most once per second so the current draw state is always visible in F9.
+-- Log to whichever console is reachable. Some executors block Roblox's F9
+-- output entirely, so the executor console APIs are tried first and warn() is
+-- only the fallback.
+local function execLog(msg)
+    local line = "[Bloxstrike] C4 ESP: " .. msg
+    local written = false
+
+    pcall(function()
+        if rconsoleprint then rconsoleprint(line .. "\n"); written = true end
+    end)
+    if not written then
+        pcall(function()
+            if consoleprint then consoleprint(line .. "\n"); written = true end
+        end)
+    end
+    if not written then
+        pcall(function()
+            if printconsole then printconsole(line); written = true end
+        end)
+    end
+
+    pcall(function() warn(line) end)
+end
+
+-- Throttled diagnostic logger (at most once per second).
 local function drawLog(msg)
     local now = os.clock()
     if (now - lastDrawLog) >= 1 then
         lastDrawLog = now
-        warn("[Bloxstrike] C4 ESP: " .. msg)
+        execLog(msg)
     end
+end
+
+-- On-screen debug readout. Drawn as Drawing text so the state is visible even
+-- when every console is blocked.
+local debugText = nil
+local function ensureDebugLabel()
+    if debugText then return end
+    pcall(function()
+        debugText = Drawing.new("Text")
+        debugText.Size = 13
+        debugText.Center = false
+        debugText.Outline = true
+        debugText.Color = Color3.fromRGB(255, 255, 0)
+        debugText.Position = Vector2.new(20, 140)
+        debugText.Visible = false
+        debugText.Text = ""
+    end)
 end
 
 local function drawWorldBomb(camera, model, color, label)
@@ -459,6 +498,23 @@ local function update()
     local planted, timer = bombAttributes()
     local worldBomb = getWorldBombCached()
 
+    -- On-screen debug readout (top-left, yellow) so the state is visible even
+    -- when every console is blocked.
+    ensureDebugLabel()
+    pcall(function()
+        if debugText then
+            debugText.Visible = (enabled == true)
+            if debugText.Visible then
+                debugText.Text = string.format(
+                    "C4 ESP\nenabled=%s\ncarrier=%s\nbomb=%s",
+                    tostring(enabled),
+                    tostring(carrier and carrier.Name),
+                    tostring(worldBomb and worldBomb.Name)
+                )
+            end
+        end
+    end)
+
     -- One-shot console message when the world (dropped) bomb is found
     if worldBomb and (not lastBombState) then
         pcall(function()
@@ -477,6 +533,8 @@ local function update()
             label = "C4 Dropped"
         end
 
+        -- Confirms update() reaches the draw call at all
+        drawLog("update -> calling drawWorldBomb for " .. tostring(worldBomb.Name))
         drawWorldBomb(camera, worldBomb, color, label)
     else
         local worldItem = C4ESP.Items["World"]
