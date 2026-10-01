@@ -60,6 +60,21 @@ local function thirdStep(c)
     end
 
     c.CFrame = CFrame.new(target) * rot
+
+    -- Keep the character visible. The game's first-person camera system
+    -- hides the local character by setting LocalTransparencyModifier to 1
+    -- on every part. Since we drive the camera CFrame ourselves and never
+    -- enter the normal first-person path, we must reset that to 0 or the
+    -- body stays invisible in third person.
+    pcall(function()
+        for _, p in ipairs(ch:GetDescendants()) do
+            if p:IsA("BasePart") then
+                if p.LocalTransparencyModifier ~= 0 then
+                    p.LocalTransparencyModifier = 0
+                end
+            end
+        end
+    end)
 end
 
 local function cameraStep()

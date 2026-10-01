@@ -107,23 +107,6 @@ local function findBombCarrier()
     return nil
 end
 
--- find C4 folder in workspace
-local function findC4Folder()
-    local function scan(container)
-        if not container then return nil end
-        
-        for _, child in ipairs(container:GetChildren()) do
-            if child:IsA("Folder") and child.Name == "C4" then
-                return child
-            end
-        end
-        
-        return nil
-    end
-    
-    return scan(Workspace)
-end
-
 local function isBombName(name)
     if type(name) ~= "string" then return false end
 
@@ -136,31 +119,58 @@ end
 
 -- the physical bomb, anything outside the characters folder
 -- From dump: C4 folder exists in Workspace, and BombHolster is a Model parented to character
-local function findWorldBomb()
-    -- First check for C4 folder in workspace (from dump analysis)
-    local c4Folder = findC4Folder()
-    if c4Folder then
-        for _, child in ipairs(c4Folder:GetChildren()) do
-            if child:IsA("Model") then
-                return child
-            end
-        end
-    end
-
-    -- Fallback: scan workspace for bomb models
-    local function scan(container)
-        if not container then return nil end
-
+-- find C4 folders recursively in workspace
+local function findC4Folders()
+    local found = {}
+    local function scan(container, depth)
+        if not container or depth > 4 then return end
         for _, child in ipairs(container:GetChildren()) do
-            if child:IsA("Model") and isBombName(child.Name) then
-                return child
+            if child:IsA("Folder") and child.Name == "C4" then
+                table.insert(found, child)
+            end
+            if child:IsA("Folder") or child:IsA("Model") then
+                scan(child, depth + 1)
             end
         end
+    end
+    scan(Workspace, 0)
+    return found
+end
 
-        return nil
+-- recursively search a container for a bomb model
+local function deepScan(container, depth)
+    if not container or depth > 5 then return nil end
+
+    for _, child in ipairs(container:GetChildren()) do
+        if child:IsA("Model") and isBombName(child.Name) then
+            return child
+        end
+        if child:IsA("Folder") or child:IsA("Model") then
+            local found = deepScan(child, depth + 1)
+            if found then return found end
+        end
     end
 
-    return scan(Workspace) or scan(Workspace:FindFirstChild("Debris"))
+    return nil
+end
+
+-- the physical bomb, anything outside the characters folder
+local function findWorldBomb()
+    -- 1. C4 folders first (from dump analysis)
+    for _, c4Folder in ipairs(findC4Folders()) do
+        local found = deepScan(c4Folder, 0)
+        if found then return found end
+    end
+
+    -- 2. Debris / dropped items
+    local debris = Workspace:FindFirstChild("Debris")
+    if debris then
+        local found = deepScan(debris, 0)
+        if found then return found end
+    end
+
+    -- 3. Whole workspace fallback
+    return deepScan(Workspace, 0)
 end
 
 local function bombAttributes()
