@@ -1,7 +1,9 @@
 -- spin bot and anti aim
--- Both manipulate the local rig on RenderStepped, which fires right before the
--- frame is drawn, so the effect is applied after the game has already positioned
--- the character and therefore only affects what is shown on screen.
+-- The rig is rotated on Heartbeat, not RenderStepped. Roblox samples the network
+-- owner's part transforms after the physics step, so a rotation written during
+-- RenderStepped only ever shows up on our own screen and is never replicated to
+-- the server or to other players. Heartbeat runs directly after physics, which is
+-- the window where the change still makes it into the replicated transform.
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
@@ -55,7 +57,9 @@ local function applyEffects()
         end
     end
 
-    if changed then
+    -- only write when it actually differs, so we do not fight the game's own
+    -- character system every single frame
+    if changed and targetCFrame ~= root.CFrame then
         root.CFrame = targetCFrame
     end
 end
@@ -67,7 +71,8 @@ function SpinBot.init(Config)
     storedConfig = Config
     lastTime = os.clock()
 
-    SpinBot.Connection = RunService.RenderStepped:Connect(function()
+    -- Heartbeat is what makes the rotation replicate, see the note at the top
+    SpinBot.Connection = RunService.Heartbeat:Connect(function()
         pcall(applyEffects)
     end)
 end

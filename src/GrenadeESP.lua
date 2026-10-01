@@ -35,9 +35,9 @@ local CLOUD_PREFIX = "voxelsmoke"
 -- where these objects live, with a per-root depth budget. Scanning only these
 -- branches is what keeps the cost near zero on large maps.
 local SEARCH_ROOTS = {
-    { name = "Assets",    depth = 4 },
-    { name = "Debris",    depth = 3 },
-    { name = "Workspace", depth = 3 }
+    { name = "Assets",    depth = 5 },
+    { name = "Debris",    depth = 4 },
+    { name = "Workspace", depth = 4 }
 }
 
 local SCAN_INTERVAL = 0.25
@@ -140,7 +140,9 @@ local function withinRange(position)
     local camera = Workspace.CurrentCamera
     if not camera then return false end
 
-    local limit = tonumber(storedConfig and storedConfig.GRENADE_ESP_MAX_DIST) or 300
+    -- generous default: the parked grenade parts sit at the far corner of the map
+    -- and only move into play when thrown, so a tight radius hides everything
+    local limit = tonumber(storedConfig and storedConfig.GRENADE_ESP_MAX_DIST) or 1500
     return (position - camera.CFrame.Position).Magnitude <= limit
 end
 

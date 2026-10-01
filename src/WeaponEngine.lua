@@ -50,13 +50,31 @@ local SPREAD_KEYS = {
     spreadfactor = true, accuracy = true, inaccuracy = true
 }
 
+-- Values that control where a bullet actually travels. Zeroing any of these
+-- changes hit registration, which is what made silent aim start missing once the
+-- gun mods were switched on: the recoil/spread pass walks the whole config table
+-- and a badly named field would have been caught in it.
+local BALLISTIC_KEYS = {
+    range = true, penetration = true, bulletsperShot = true,
+    damage = true, damageperpart = true, rangemodifier = true,
+    armorpenetration = true, velocity = true, speed = true,
+    headshotmultiplier = true, falloff = true
+}
+
+-- 3000 rpm is already beyond what the target scan can keep up with; going lower
+-- just makes bullets spawn faster than CurrentTargetPart is refreshed, which reads
+-- as silent aim "missing".
+local MIN_FIRE_RATE = 0.02
+
 local function zeroAllNumbers(tbl)
     if type(tbl) ~= 'table' then return end
     if isreadonly(tbl) then setreadonly(tbl, false) end
 
     for key, value in pairs(tbl) do
         if type(value) == 'number' then
-            tbl[key] = 0
+            if not BALLISTIC_KEYS[tostring(key):lower()] then
+                tbl[key] = 0
+            end
         elseif type(value) == 'table' then
             zeroAllNumbers(value)
         end
@@ -76,7 +94,7 @@ local function patchRecoilSpread(tbl, Config, depth)
         local lower = tostring(key):lower()
         local matched = (removeRecoil and RECOIL_KEYS[lower]) or (removeSpread and SPREAD_KEYS[lower])
 
-        if matched then
+        if matched and not BALLISTIC_KEYS[lower] then
             if type(value) == 'number' then
                 tbl[key] = 0
             elseif type(value) == 'table' then
@@ -88,6 +106,35 @@ local function patchRecoilSpread(tbl, Config, depth)
     end
 end
 
+-- belt and braces: put the original ballistic numbers back after patching, so a
+-- stray match can never survive into the actual shot
+local function restoreBallistics(cfg, orig)
+    if type(cfg) ~= 'table' or type(orig) ~= 'table' then return end
+
+    for origKey, origValue in pairs(orig) do
+        if BALLISTIC_KEYS[tostring(origKey):lower()] then
+            if cfg[origKey] ~= origValue then
+                pcall(function() cfg[origKey] = origValue end)
+            end
+        end
+    end
+end
+
+-- shared fire rate resolution, clamped so it can never run away
+local function resolveFireRate(Config, orig)
+    local rate = nil
+
+    if Config.CUSTOM_RPM_ENABLED and Config.CUSTOM_RPM_VALUE and Config.CUSTOM_RPM_VALUE > 0 then
+        rate = 60 / Config.CUSTOM_RPM_VALUE
+    elseif orig and orig.FireRate ~= nil then
+        rate = orig.FireRate
+    end
+
+    if type(rate) ~= 'number' then return nil end
+
+    return math.max(rate, MIN_FIRE_RATE)
+end
+
 -- patch database configs
 local function patchDatabaseConfig(cfg, name, Config)
     if not cfg or type(cfg) ~= 'table' then return end
@@ -95,14 +142,14 @@ local function patchDatabaseConfig(cfg, name, Config)
 
     local orig = WeaponEngine._originalConfigs[name] or {}
 
-    -- recoil and spread removal
+    -- recoil and spread removal, ballistics put straight back afterwards
     patchRecoilSpread(cfg, Config)
+    restoreBallistics(cfg, orig)
 
-    -- custom rpm
-    if Config.CUSTOM_RPM_ENABLED and Config.CUSTOM_RPM_VALUE and Config.CUSTOM_RPM_VALUE > 0 then
-        cfg.FireRate = 60 / Config.CUSTOM_RPM_VALUE
-    elseif orig.FireRate ~= nil then
-        cfg.FireRate = orig.FireRate
+    -- custom rpm, clamped so bullets cannot outpace the target scan
+    local fireRate = resolveFireRate(Config, orig)
+    if fireRate then
+        cfg.FireRate = fireRate
     end
 
     -- full auto
@@ -165,11 +212,11 @@ local function patchLiveItem(item, Config)
         local orig = WeaponEngine._originalConfigs[item.Name] or {}
 
         patchRecoilSpread(props, Config)
+        restoreBallistics(props, orig)
 
-        if Config.CUSTOM_RPM_ENABLED and Config.CUSTOM_RPM_VALUE and Config.CUSTOM_RPM_VALUE > 0 then
-            props.FireRate = 60 / Config.CUSTOM_RPM_VALUE
-        elseif orig.FireRate ~= nil then
-            props.FireRate = orig.FireRate
+        local fireRate = resolveFireRate(Config, orig)
+        if fireRate then
+            props.FireRate = fireRate
         end
 
         if Config.FORCE_FULL_AUTO then
