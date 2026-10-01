@@ -86,7 +86,11 @@ local Bhop             = import("Bhop")
 local AntiFlash        = import("AntiFlash")
 local WeaponEngine     = import("WeaponEngine")
 local HitSound         = import("HitSound")
-local LinoriaLib       = import("LinoriaLib")
+local BulletTracer     = import("BulletTracer")
+local GrenadeESP       = import("GrenadeESP")
+local SpinBot          = import("SpinBot")
+local ThirdPerson      = import("ThirdPerson")
+local LinoriaLib      = import("LinoriaLib")
 local UIManager        = import("UIManager")
 
 -- load config
@@ -109,8 +113,12 @@ fovCircle.ZIndex = 1
 fovCircle.Visible = Config.FOV_CIRCLE_ENABLED
 
 -- init subsystems
+GrenadeESP.init(Config)
+SpinBot.init(Config)
+ThirdPerson.init(Config)
+BulletTracer.init(Config)
 HitSound.init(Config, Utils)
-SilentAim.init(Config, Utils, HitSound)
+SilentAim.init(Config, Utils, HitSound, BulletTracer)
 Wallbang.init(Config)
 Bhop.init(Config)
 AntiFlash.init(Config)
@@ -126,6 +134,10 @@ local function cleanup()
     
     UIManager.cleanup()
     WeaponEngine.cleanup()
+    GrenadeESP.cleanup()
+    SpinBot.cleanup()
+    ThirdPerson.cleanup()
+    BulletTracer.cleanup()
     HitSound.cleanup()
     Bhop.cleanup()
     AntiFlash.cleanup()
