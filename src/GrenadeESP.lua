@@ -126,9 +126,33 @@ local function withinRange(position)
     return (position - camera.CFrame.Position).Magnitude <= limit
 end
 
+-- The dump pinned down where these objects live, so membership is decided by the
+-- container instead of by guessing at names. GrenadeParticles holds exactly the
+-- live grenade parts, and only the two fire effect parts are filtered out.
+local EFFECT_EXCLUDE = { outerfire = true, innerfire = true }
+
 -- folders and models only; map geometry is made of parts, so this stays cheap
 local function scanForObjects()
     matchedNow = {}
+
+    local function mark(inst, category, position)
+        if position and withinRange(position) then
+            matchedNow[inst] = category
+        end
+    end
+
+    -- everything directly under GrenadeParticles is a live grenade
+    local function collectGrenades(folder)
+        for _, child in ipairs(folder:GetChildren()) do
+            if child:IsA("BasePart") then
+                local lower = child.Name:lower()
+
+                if not EFFECT_EXCLUDE[lower] then
+                    mark(child, PROFILE_GRENADE, getWorldPosition(child))
+                end
+            end
+        end
+    end
 
     -- remaining is the number of levels left to descend; each level's children
     -- are name checked before deciding whether to go deeper
@@ -136,22 +160,30 @@ local function scanForObjects()
         if (not inst) or remaining <= 0 then return end
 
         for _, child in ipairs(inst:GetChildren()) do
-            local category = categoryFor(child.Name)
+            local lower = child.Name:lower()
 
-            if category then
-                local position = getWorldPosition(child)
+            if lower == "grenadeparticles" then
+                collectGrenades(child)
 
-                if position and withinRange(position) then
-                    matchedNow[child] = category
+            elseif lower:sub(1, #CLOUD_PREFIX) == CLOUD_PREFIX then
+                -- the cloud is a folder of voxel parts, so the folder is the marker
+                mark(child, PROFILE_GRENADE, getWorldPosition(child))
 
-                    -- the cloud holds dozens of voxel parts, none of which are
-                    -- grenades, so its subtree is skipped entirely
-                    if not isCloud(child.Name) then
-                        walk(child, remaining - 1)
-                    end
+            elseif lower == "c4" and (child:IsA("Folder") or child:IsA("Model")) then
+                -- Assets.Weapons.C4 holds the bomb rig. The skin and animation
+                -- folders sharing that name hold no parts and cannot produce a
+                -- position, so they are filtered out by mark() automatically.
+                mark(child, PROFILE_C4, getWorldPosition(child))
+
+            else
+                local category = categoryFor(child.Name)
+
+                if category then
+                    mark(child, category, getWorldPosition(child))
+                    walk(child, remaining - 1)
+                elseif child:IsA("Folder") or child:IsA("Model") then
+                    walk(child, remaining - 1)
                 end
-            elseif child:IsA("Folder") or child:IsA("Model") then
-                walk(child, remaining - 1)
             end
         end
     end

@@ -25,9 +25,17 @@ local function log(count, message)
     pcall(warn, "[Bloxstrike] tracer " .. message)
 end
 
+local function smoothStep(t)
+    t = math.clamp(t, 0, 1)
+    return t * t * (3 - 2 * t)
+end
+
 local function safeSet(obj, property, value)
     pcall(function() obj[property] = value end)
 end
+
+-- how long the beam takes to shoot out of the muzzle
+local GROW_TIME = 0.07
 
 local function acquireLine()
     local line = table.remove(pool)
@@ -74,15 +82,30 @@ function BulletTracer.init(Config)
 
                     pcall(function() line.Visible = false end)
                 else
-                    pcall(function()
-                        line.From = Vector2.new(fromSp.X, fromSp.Y)
-                        line.To = Vector2.new(toSp.X, toSp.Y)
-                    end)
+                    -- the beam shoots out of the muzzle over a few frames and
+                    -- then eases away, instead of popping in as a hard full line
+                    local elapsed = info.duration - remaining
+                    local grow = info.growTime and info.growTime > 0
+                        and smoothStep(elapsed / info.growTime) or 1
 
-                    local fraction = math.clamp(remaining / info.duration, 0, 1)
-                    safeSet(line, "Thickness", math.max(info.baseThickness * fraction, 0.12))
+                    local endWorld = (grow >= 1) and info.endWorld
+                        or info.startWorld:Lerp(info.endWorld, grow)
 
-                    pcall(function() line.Visible = true end)
+                    local okEnd, endSp = pcall(camera.WorldToViewportPoint, camera, endWorld)
+
+                    if (not okEnd) or (not endSp) or (endSp.Z <= 0.01) then
+                        pcall(function() line.Visible = false end)
+                    else
+                        pcall(function()
+                            line.From = Vector2.new(fromSp.X, fromSp.Y)
+                            line.To = Vector2.new(endSp.X, endSp.Y)
+                        end)
+
+                        local fraction = smoothStep(remaining / info.duration)
+                        safeSet(line, "Thickness", math.max(info.baseThickness * fraction, 0.12))
+
+                        pcall(function() line.Visible = true end)
+                    end
                 end
             end
         end
@@ -139,9 +162,9 @@ function BulletTracer.push(hitData, Config)
     -- the view model gun sits down and to the right of the camera.
     local cameraCFrame = camera.CFrame
     local startPoint = cameraCFrame.Position
-        + (cameraCFrame.RightVector * 0.5)
-        + (cameraCFrame.UpVector * -0.34)
-        + (cameraCFrame.LookVector * 0.9)
+        + (cameraCFrame.RightVector * 0.38)
+        + (cameraCFrame.UpVector * -0.28)
+        + (cameraCFrame.LookVector * 0.75)
 
     local okStart, startSp = pcall(camera.WorldToViewportPoint, camera, startPoint)
     local okTo, toSp = pcall(camera.WorldToViewportPoint, camera, endPoint)
@@ -170,31 +193,22 @@ function BulletTracer.push(hitData, Config)
     local thickness = Config.BULLET_TRACER_THICKNESS or 1.5
     local color = Config.BULLET_TRACER_COLOR or Color3.fromRGB(186, 140, 255)
 
-    -- each property gets its own protected assign, so one unsupported property
-    -- can never abort the ones after it and leave the line invisible
-    local okFrom = pcall(function()
-        line.From = Vector2.new(startSp.X, startSp.Y)
-        line.To = Vector2.new(toSp.X, toSp.Y)
-    end)
-
+    -- From/To/Thickness/Visible are driven by the render loop from here on, so
+    -- they are deliberately not set at creation: the grow animation has to start
+    -- from the muzzle rather than appear as a finished full length line.
     local okColor = pcall(function() line.Color = color end)
-    local okThick = pcall(function() line.Thickness = thickness end)
     safeSet(line, "ZIndex", 6)
 
     -- 0.5 is visible under either transparency convention
     safeSet(line, "Transparency", 0.5)
 
-    local okVisible = pcall(function() line.Visible = true end)
-
-    if not okFrom then log(3, "failed: From/To") end
     if not okColor then log(3, "failed: Color") end
-    if not okThick then log(3, "failed: Thickness") end
-    if not okVisible then log(3, "failed: Visible") end
 
     active[line] = {
         expire = os.clock() + duration,
         duration = duration,
         baseThickness = thickness,
+        growTime = GROW_TIME,
         startWorld = startPoint,
         endWorld = endPoint
     }
