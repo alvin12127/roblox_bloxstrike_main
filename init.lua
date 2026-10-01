@@ -96,6 +96,9 @@ local InstantReload    = import("InstantReload")
 local LinoriaLib      = import("LinoriaLib")
 local UIManager        = import("UIManager")
 
+-- Load arvn UI library
+local Arvn = loadstring(game:HttpGet("https://raw.githubusercontent.com/koteqjjjj/arvn/main/arvn.lua"))()
+
 -- load config
 Config.load()
 
@@ -181,7 +184,7 @@ _G.__bloxstrikeConfig = Config
 
 -- init ui
 reportInit("UIManager", function()
-    UIManager.init(Config, LinoriaLib, nil, WeaponEngine, cleanup, HitSound)
+    UIManager.init(Config, Arvn, nil, WeaponEngine, cleanup, HitSound)
 end)
 
 -- auto-launch skinchanger if enabled
