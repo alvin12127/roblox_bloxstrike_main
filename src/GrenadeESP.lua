@@ -37,7 +37,7 @@ local CLOUD_PREFIX = "voxelsmoke"
 local SEARCH_ROOTS = {
     { name = "Assets",    depth = 4 },
     { name = "Debris",    depth = 3 },
-    { name = "Workspace", depth = 2 }
+    { name = "Workspace", depth = 3 }
 }
 
 local SCAN_INTERVAL = 0.25

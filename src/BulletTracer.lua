@@ -53,6 +53,8 @@ function BulletTracer.init(Config)
 
     BulletTracer.RenderConn = RunService.RenderStepped:Connect(function()
         local now = os.clock()
+        local camera = Workspace.CurrentCamera
+        if not camera then return end
 
         for line, info in pairs(active) do
             local remaining = info.expire - now
@@ -61,8 +63,27 @@ function BulletTracer.init(Config)
                 active[line] = nil
                 releaseLine(line)
             else
-                local fraction = math.clamp(remaining / info.duration, 0, 1)
-                safeSet(line, "Thickness", math.max(info.baseThickness * fraction, 0.12))
+                -- The world endpoints are re-projected every frame. A drawing line
+                -- only stores screen coordinates, so without this the tracer would
+                -- stay glued to the same spot on screen while the camera moves.
+                local okFrom, fromSp = pcall(camera.WorldToViewportPoint, camera, info.startWorld)
+                local okTo, toSp = pcall(camera.WorldToViewportPoint, camera, info.endWorld)
+
+                if (not okFrom) or (not okTo) or (not fromSp) or (not toSp)
+                    or (fromSp.Z <= 0.01) or (toSp.Z <= 0.01) then
+
+                    pcall(function() line.Visible = false end)
+                else
+                    pcall(function()
+                        line.From = Vector2.new(fromSp.X, fromSp.Y)
+                        line.To = Vector2.new(toSp.X, toSp.Y)
+                    end)
+
+                    local fraction = math.clamp(remaining / info.duration, 0, 1)
+                    safeSet(line, "Thickness", math.max(info.baseThickness * fraction, 0.12))
+
+                    pcall(function() line.Visible = true end)
+                end
             end
         end
     end)
@@ -173,7 +194,9 @@ function BulletTracer.push(hitData, Config)
     active[line] = {
         expire = os.clock() + duration,
         duration = duration,
-        baseThickness = thickness
+        baseThickness = thickness,
+        startWorld = startPoint,
+        endWorld = endPoint
     }
 
     log(3, string.format(
