@@ -68,22 +68,31 @@ function BulletTracer.push(hitData, Config)
 
     local endPoint = origin + (direction * distance)
 
-    local okFrom, fromSp = pcall(Camera.WorldToViewportPoint, Camera, origin)
+    -- the ray origin sits at the camera itself where the projected depth is 0,
+    -- which makes the start point degenerate - nudge it forward along the ray
+    local startPoint = origin
+    local okStart, startSp = pcall(Camera.WorldToViewportPoint, Camera, startPoint)
+
+    if (not okStart) or (not startSp) or (startSp.Z <= 0.05) then
+        startPoint = origin + (direction * 0.25)
+        okStart, startSp = pcall(Camera.WorldToViewportPoint, Camera, startPoint)
+    end
+
     local okTo, toSp = pcall(Camera.WorldToViewportPoint, Camera, endPoint)
 
-    if (not okFrom) or (not okTo) or (not fromSp) or (not toSp) then
+    if (not okStart) or (not okTo) or (not startSp) or (not toSp) then
         releaseLine(line)
         return
     end
 
-    if fromSp.Z <= 0.01 or toSp.Z <= 0.01 then
+    if startSp.Z <= 0.01 or toSp.Z <= 0.01 then
         releaseLine(line)
         return
     end
 
     local duration = Config.BULLET_TRACER_DURATION or 0.6
 
-    line.From = Vector2.new(fromSp.X, fromSp.Y)
+    line.From = Vector2.new(startSp.X, startSp.Y)
     line.To = Vector2.new(toSp.X, toSp.Y)
     line.Color = Config.BULLET_TRACER_COLOR or Color3.fromRGB(186, 140, 255)
     line.Thickness = Config.BULLET_TRACER_THICKNESS or 1.5

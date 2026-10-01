@@ -493,6 +493,24 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
+    VisualSettings:AddToggle("BoxEsp", {
+        Text = "Box ESP",
+        Default = (Config.BOX_ESP_ENABLED ~= false),
+        Tooltip = "Bounding cube rendered around every enemy",
+        Callback = function(Value)
+            updateSetting("BOX_ESP_ENABLED", Value)
+        end
+    })
+
+    VisualSettings:AddToggle("GrenadeEsp", {
+        Text = "Grenade ESP",
+        Default = (Config.GRENADE_ESP_ENABLED == true),
+        Tooltip = "Shows thrown grenades and other explosive objects on the map",
+        Callback = function(Value)
+            updateSetting("GRENADE_ESP_ENABLED", Value)
+        end
+    })
+
     VisualSettings:AddToggle("AntiFlash", {
         Text = "Anti-flash",
         Default = (Config.ANTI_FLASH_ENABLED ~= false),
@@ -665,6 +683,90 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
 
 
 
+    -- spin bot, anti aim and third person
+    local AimControl = Tabs.Movement:AddRightGroupbox("Spin Bot & Anti Aim")
+
+    AimControl:AddToggle("SpinBotToggle", {
+        Text = "Spin bot",
+        Default = (Config.SPINBOT_ENABLED == true),
+        Tooltip = "Spins the local rig continuously. Only affects what is shown on screen.",
+        Callback = function(Value)
+            updateSetting("SPINBOT_ENABLED", Value)
+        end
+    })
+
+    AimControl:AddSlider("SpinBotRpm", {
+        Text = "Spin speed",
+        Default = Config.SPINBOT_RPM or 600,
+        Min = 60,
+        Max = 3000,
+        Rounding = 0,
+        Compact = false,
+        Suffix = " RPM",
+        Callback = function(Value)
+            updateSetting("SPINBOT_RPM", Value)
+        end
+    })
+
+    AimControl:AddToggle("AntiAimToggle", {
+        Text = "Anti aim",
+        Default = (Config.ANTIAIM_ENABLED == true),
+        Tooltip = "Tilts the local rig so the head is harder to read",
+        Callback = function(Value)
+            updateSetting("ANTIAIM_ENABLED", Value)
+        end
+    })
+
+    AimControl:AddSlider("AntiAimPitch", {
+        Text = "Pitch",
+        Default = Config.ANTIAIM_PITCH or 60,
+        Min = 0,
+        Max = 120,
+        Rounding = 0,
+        Compact = false,
+        Suffix = "°",
+        Callback = function(Value)
+            updateSetting("ANTIAIM_PITCH", Value)
+        end
+    })
+
+    local CameraBox = Tabs.Movement:AddRightGroupbox("Third Person")
+
+    CameraBox:AddToggle("ThirdPersonToggle", {
+        Text = "Third person",
+        Default = (Config.THIRDPERSON_ENABLED == true),
+        Tooltip = "Pulls the camera back behind the rig. Mouse look is unaffected.",
+        Callback = function(Value)
+            updateSetting("THIRDPERSON_ENABLED", Value)
+        end
+    })
+
+    CameraBox:AddSlider("ThirdPersonDistance", {
+        Text = "Distance",
+        Default = Config.THIRDPERSON_DISTANCE or 9,
+        Min = 4,
+        Max = 40,
+        Rounding = 0,
+        Compact = false,
+        Suffix = " studs",
+        Callback = function(Value)
+            updateSetting("THIRDPERSON_DISTANCE", Value)
+        end
+    })
+
+    CameraBox:AddSlider("ThirdPersonHeight", {
+        Text = "Height offset",
+        Default = Config.THIRDPERSON_HEIGHT or 0,
+        Min = -6,
+        Max = 10,
+        Rounding = 0,
+        Compact = false,
+        Suffix = " studs",
+        Callback = function(Value)
+            updateSetting("THIRDPERSON_HEIGHT", Value)
+        end
+    })
+
     -- settings tab
     local MenuGroup = Tabs.Settings:AddLeftGroupbox("Keybinds")
     local ActionsGroup = Tabs.Settings:AddRightGroupbox("Actions")
@@ -773,6 +875,8 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
             if Toggles.SkeletonEsp then Toggles.SkeletonEsp:SetValue(Config.SKELETON_ENABLED) end
             if Toggles.NameEsp then Toggles.NameEsp:SetValue(Config.NAME_ESP_ENABLED ~= false) end
             if Toggles.ItemEsp then Toggles.ItemEsp:SetValue(Config.ITEM_ESP_ENABLED ~= false) end
+            if Toggles.BoxEsp then Toggles.BoxEsp:SetValue(Config.BOX_ESP_ENABLED ~= false) end
+            if Toggles.GrenadeEsp then Toggles.GrenadeEsp:SetValue(Config.GRENADE_ESP_ENABLED) end
             if Toggles.ViewAngle then Toggles.ViewAngle:SetValue(Config.VIEWANGLE_ENABLED) end
             if Toggles.OffscreenArrows then Toggles.OffscreenArrows:SetValue(Config.OFFSCREEN_ARROWS) end
             if Toggles.TargetPartHl then Toggles.TargetPartHl:SetValue(Config.BODYPART_TARGET_HL) end
@@ -794,6 +898,13 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
             if Options.TracerDuration then Options.TracerDuration:SetValue((Config.BULLET_TRACER_DURATION or 0.6) * 10) end
 
             if Toggles.Bhop then Toggles.Bhop:SetValue(Config.BHOP_ENABLED) end
+            if Toggles.SpinBotToggle then Toggles.SpinBotToggle:SetValue(Config.SPINBOT_ENABLED) end
+            if Options.SpinBotRpm then Options.SpinBotRpm:SetValue(Config.SPINBOT_RPM or 600) end
+            if Toggles.AntiAimToggle then Toggles.AntiAimToggle:SetValue(Config.ANTIAIM_ENABLED) end
+            if Options.AntiAimPitch then Options.AntiAimPitch:SetValue(Config.ANTIAIM_PITCH or 60) end
+            if Toggles.ThirdPersonToggle then Toggles.ThirdPersonToggle:SetValue(Config.THIRDPERSON_ENABLED) end
+            if Options.ThirdPersonDistance then Options.ThirdPersonDistance:SetValue(Config.THIRDPERSON_DISTANCE or 9) end
+            if Options.ThirdPersonHeight then Options.ThirdPersonHeight:SetValue(Config.THIRDPERSON_HEIGHT or 0) end
             if Toggles.KnifeChanger then Toggles.KnifeChanger:SetValue(Config.KNIFE_SKINS_ENABLED ~= false) end
             if Toggles.WeaponChanger then Toggles.WeaponChanger:SetValue(Config.WEAPON_SKINS_ENABLED ~= false) end
             if Options.KnifeModel then Options.KnifeModel:SetValue(Config.KNIFE_MODEL or "Butterfly Knife") end

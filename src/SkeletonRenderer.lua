@@ -105,6 +105,7 @@ function SkeletonRenderer.create()
         HpFill = Drawing.new("Line"),
         NameText = Drawing.new("Text"),
         ItemText = Drawing.new("Text"),
+        Box = Drawing.new("Square"),
         Arrow = Drawing.new("Triangle")
     }
 
@@ -144,12 +145,52 @@ function SkeletonRenderer.create()
     obj.ItemText.ZIndex = 3
     obj.ItemText.Visible = false
 
+    obj.Box.Filled = false
+    obj.Box.Thickness = 1.5
+    obj.Box.Color = Color3.fromRGB(240, 240, 245)
+    obj.Box.ZIndex = 2
+    obj.Box.Visible = false
+
     obj.Arrow.Filled = true
     obj.Arrow.Thickness = 1
     obj.Arrow.ZIndex = 5
     obj.Arrow.Visible = false
 
     return obj
+end
+
+-- names GUI (skeleton) uses ``minY``/``maxY`` as well, but these bounds come from
+-- hitbox parts directly so box esp, name and item tags still work when the
+-- skeleton itself is turned off
+local BOUND_PARTS = {
+    "Head", "UpperTorso", "Torso", "LowerTorso", "HumanoidRootPart",
+    "LeftHand", "RightHand", "LeftFoot", "RightFoot"
+}
+
+local function computeCharacterBounds(char)
+    local minX, minY = math.huge, math.huge
+    local maxX, maxY = -math.huge, -math.huge
+    local onScreen = false
+
+    for _, partName in ipairs(BOUND_PARTS) do
+        local part = char:FindFirstChild(partName)
+        if part and part:IsA("BasePart") then
+            local sp = Camera:WorldToViewportPoint(part.Position)
+            if sp.Z > 0 then
+                onScreen = true
+                if sp.X < minX then minX = sp.X end
+                if sp.X > maxX then maxX = sp.X end
+                if sp.Y < minY then minY = sp.Y end
+                if sp.Y > maxY then maxY = sp.Y end
+            end
+        end
+    end
+
+    if not onScreen then
+        return nil
+    end
+
+    return minX, maxX, minY, maxY
 end
 
 function SkeletonRenderer.hide(drawObj)
@@ -161,6 +202,7 @@ function SkeletonRenderer.hide(drawObj)
     drawObj.HpFill.Visible = false
     if drawObj.NameText then drawObj.NameText.Visible = false end
     if drawObj.ItemText then drawObj.ItemText.Visible = false end
+    if drawObj.Box then drawObj.Box.Visible = false end
     if drawObj.Arrow then drawObj.Arrow.Visible = false end
 end
 
@@ -173,6 +215,7 @@ function SkeletonRenderer.destroy(drawObj)
     pcall(function() drawObj.HpFill:Remove() end)
     if drawObj.NameText then pcall(function() drawObj.NameText:Remove() end) end
     if drawObj.ItemText then pcall(function() drawObj.ItemText:Remove() end) end
+    if drawObj.Box then pcall(function() drawObj.Box:Remove() end) end
     if drawObj.Arrow then pcall(function() drawObj.Arrow:Remove() end) end
 end
 
@@ -218,9 +261,17 @@ function SkeletonRenderer.render(drawObj, char, health, maxHealth, boneColor, ba
         return
     end
 
-    local minX, maxX = math.huge, -math.huge
-    local minY, maxY = math.huge, -math.huge
-    local anyVisible = false
+    local minX, maxX, minY, maxY = computeCharacterBounds(char)
+
+    if minX == nil then
+        -- off screen: keep the sentinels so the bone accumulation still works and
+        -- the offscreen arrow block below stays reachable
+        minX, maxX = math.huge, -math.huge
+        minY, maxY = math.huge, -math.huge
+    end
+
+    local anyVisible = (maxX > -math.huge)
+    local skeletonEnabled = not Config or (Config.SKELETON_ENABLED ~= false)
     local skeletonEnabled = not Config or (Config.SKELETON_ENABLED ~= false)
     local viewAngleEnabled = not Config or (Config.VIEWANGLE_ENABLED ~= false)
 
@@ -301,7 +352,21 @@ function SkeletonRenderer.render(drawObj, char, health, maxHealth, boneColor, ba
     local maxHpNum = tonumber(maxHealth) or 100
     if maxHpNum <= 0 then maxHpNum = 100 end
 
-    if skeletonEnabled and anyVisible and hpNum > 0 and minY < maxY then
+    -- box esp (cube)
+    if drawObj.Box then
+        local showBox = (not Config or Config.BOX_ESP_ENABLED ~= false) and anyVisible
+
+        drawObj.Box.Visible = showBox
+
+        if showBox then
+            drawObj.Box.Position = Vector2.new(minX - 5, minY - 5)
+            drawObj.Box.Size = Vector2.new((maxX - minX) + 10, (maxY - minY) + 10)
+            drawObj.Box.Color = boneColor
+            drawObj.Box.Thickness = 1.5
+        end
+    end
+
+    if anyVisible and hpNum > 0 and minY < maxY then
         local barX = minX - 8
         local barHeight = math.max(maxY - minY, 12)
         local fraction = math.clamp(hpNum / maxHpNum, 0.01, 1.0)
