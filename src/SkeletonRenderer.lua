@@ -395,8 +395,9 @@ function SkeletonRenderer.render(drawObj, char, health, maxHealth, boneColor, ba
             local x2, y2 = maxX + 5, maxY + 5
             local width = x2 - x1
             local height = y2 - y1
-            local arm = math.floor(math.min(width, height) * 0.3)
-            arm = math.max(arm, 8)
+            local arm = math.floor(math.min(width, height) * 0.18)
+            arm = math.min(arm, 16)
+            arm = math.max(arm, 6)
 
             local segs = {
                 { Vector2.new(x1, y1), Vector2.new(x1 + arm, y1) },

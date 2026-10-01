@@ -82,7 +82,13 @@ function BulletTracer.push(hitData, Config)
     local direction = hitData.Direction
     local distance = hitData.Distance
 
-    if not origin or not direction or not distance then warnOnce("missing hit data fields") return end
+    if typeof(origin) ~= "Vector3" or typeof(direction) ~= "Vector3" then
+        warnOnce("unexpected hit data geometry")
+        return
+    end
+
+    distance = tonumber(distance) or 0
+
     if distance <= 0 then warnOnce("zero distance") return end
 
     local line = acquireLine()

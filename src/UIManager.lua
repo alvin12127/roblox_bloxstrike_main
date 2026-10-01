@@ -760,13 +760,13 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
     })
 
     CameraBox:AddDropdown("ThirdPersonMethod", {
-        Values = { "Offset", "Push" },
-        Default = Config.THIRDPERSON_METHOD or "Offset",
+        Values = { "Push", "Offset" },
+        Default = Config.THIRDPERSON_METHOD or "Push",
         Multi = false,
         Text = "Method",
-        Tooltip = "Offset: native Humanoid.CameraOffset, safest, respects walls.\nPush: overwrites the camera directly, works on any game but does not respect walls.",
+        Tooltip = "Push: overwrites the camera directly - the one that actually works here.\nOffset:native Humanoid.CameraOffset, mostly a no-op in games with a custom camera.",
         Callback = function(Value)
-            updateSetting("THIRDPERSON_METHOD", (Value == "Push") and "Push" or "Offset")
+            updateSetting("THIRDPERSON_METHOD", (Value == "Offset") and "Offset" or "Push")
         end
     })
 

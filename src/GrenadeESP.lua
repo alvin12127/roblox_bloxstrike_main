@@ -1,16 +1,17 @@
 -- grenade and c4 esp
--- Thrown objects are matched purely by name hints because the game does not
--- mark them. Two independent profiles are maintained: "grenade" and "c4", each
--- own toggle and color. Anything carried by a player is skipped, nested matches
--- (a model plus its parts) are collapsed to the outermost instance, and matches
--- are limited to a radius so static map props far away stay out of the way.
+-- Ground truth from the game dump: thrown grenades are Parts/Models that carry
+-- the exact inventory weapon name ("Smoke Grenade", "HE Grenade", "Flashbang",
+-- "Molotov", "Incendiary Grenade", "Decoy Grenade") and the detonating smoke
+-- cloud is a Folder whose name starts with "VoxelSmoke". Matching is exact on
+-- purpose, which is why dropped rifles on the ground are never picked up.
+--
+-- Two independent profiles with their own toggles and colors: grenade and c4.
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 
 local LocalPlayer = Players.LocalPlayer
-local Camera = Workspace.CurrentCamera
 
 local GrenadeESP = {
     Initialized = false,
@@ -21,50 +22,53 @@ local storedConfig = nil
 
 local PROFILES = {
     grenade = {
-        hints = { "grenade", "granade", "flash", "smoke", "molotov", "incendiary", "cesar", "spike" },
+        configKey = "GRENADE_ESP_ENABLED",
         color = Color3.fromRGB(255, 190, 70),
-        configKey = "GRENADE_ESP_ENABLED"
+        names = {
+            "smoke grenade", "he grenade", "incendiary grenade", "decoy grenade",
+            "flashbang", "molotov", "smokegrenade", "hegrenade", "incendiarygrenade",
+            "decoygrenade"
+        }
     },
     c4 = {
-        hints = { "c4", "bomb", "explosive", "planted", "defuse" },
+        configKey = "C4_ESP_ENABLED",
         color = Color3.fromRGB(255, 70, 70),
-        configKey = "C4_ESP_ENABLED"
+        names = { "c4", "bomb" }
     }
 }
 
+-- the smoke cloud carries an extra marker neither profile covers exactly
+local CLOUD_PREFIX = "voxelsmoke"
+
 local SCAN_INTERVAL = 0.25
+local MAX_DEPTH = 5
 local GRACE_MISSES = 2
 
 local entries = {}     -- [instance] = { Box, Text, category }
 local missCount = {}   -- [instance] = consecutive scans without a match
 local lastScan = 0
 
-local function hintsFor(category)
-    local fromConfig = storedConfig and storedConfig.GRENADE_NAMES
+local function resolveProfile(category)
+    return PROFILES[category] or PROFILES.grenade
+end
 
-    if type(fromConfig) ~= "table" or #fromConfig == 0 then
-        return PROFILES[category].hints
-    end
-
-    -- Config.GRENADE_NAMES applies to the grenade profile only
-    if category == "grenade" then
-        return fromConfig
-    end
-
-    return PROFILES[category].hints
+local function isCloudName(name)
+    return type(name) == "string" and name:lower():sub(1, #CLOUD_PREFIX) == CLOUD_PREFIX
 end
 
 local function matchCategory(name)
-    if type(name) ~= "string" then return nil end
-    local lower = name:lower()
+    local lower = type(name) == "string" and name:lower() or ""
 
-    -- pairs() is unordered, so c4 is checked first on purpose to keep a name
-    -- that matches both profiles from flickering between categories
+    if isCloudName(name) then
+        return "grenade"
+    end
+
+    -- "c4" first so a name that could belong to both profiles stays stable
     local order = { "c4", "grenade" }
 
     for _, category in ipairs(order) do
-        for _, hint in ipairs(hintsFor(category)) do
-            if type(hint) == "string" and hint ~= "" and lower:find(hint, 1, true) then
+        for _, candidate in ipairs(resolveProfile(category).names) do
+            if lower == candidate then
                 return category
             end
         end
@@ -90,8 +94,6 @@ local function withinRange(position)
     return (position - camera.CFrame.Position).Magnitude <= limit
 end
 
--- anything nested under an instance that already matched is collapsed, which is
--- what stops a single smoke from showing up as several drawings at once
 local function hasMatchedAncestor(inst, seen)
     local parent = inst.Parent
 
@@ -103,39 +105,38 @@ local function hasMatchedAncestor(inst, seen)
     return false
 end
 
+-- depth limited traversal: grenades only live a few levels under the workspace
+-- and a full descendants() walk is far too costly on large maps
 local function scanForObjects()
     local charsFolder = Workspace:FindFirstChild("Characters")
     local matched = {}
 
-    local function consider(inst)
-        if (not inst) or matched[inst] then return end
-        if not (inst:IsA("BasePart") or inst:IsA("Model")) then return end
-        if charsFolder and inst:IsDescendantOf(charsFolder) then return end
+    local function walk(inst, depth)
+        if depth > MAX_DEPTH then return end
+        if not inst then return end
 
-        local category = matchCategory(inst.Name)
-        if not category then return end
+        for _, child in ipairs(inst:GetChildren()) do
+            if child ~= charsFolder then
+                -- Carried gear lives inside a character, so cut that branch off
+                if not (charsFolder and child:IsDescendantOf(charsFolder)) then
+                    local category = matchCategory(child.Name)
 
-        local position = getWorldPosition(inst)
-        if not position or not withinRange(position) then return end
+                    if category then
+                        local position = getWorldPosition(child)
+                        if position and withinRange(position) then
+                            matched[child] = category
+                        end
+                    end
 
-        matched[inst] = category
-    end
-
-    for _, child in ipairs(Workspace:GetChildren()) do
-        if child ~= charsFolder then
-            consider(child)
-
-            for _, sub in ipairs(child:GetChildren()) do
-                consider(sub)
-
-                for _, leaf in ipairs(sub:GetChildren()) do
-                    consider(leaf)
+                    walk(child, depth + 1)
                 end
             end
         end
     end
 
-    -- collapse nested matches
+    walk(Workspace, 0)
+
+    -- collapse nested matches so a single smoke never shows up twice
     local collapsed = {}
     for inst, category in pairs(matched) do
         if not hasMatchedAncestor(inst, matched) then
@@ -206,7 +207,7 @@ local function updateDrawings()
         if (not inst) or inst.Parent == nil then
             releaseDrawings(inst)
         else
-            local profile = PROFILES[set.category] or PROFILES.grenade
+            local profile = resolveProfile(set.category)
             local enabled = storedConfig and storedConfig[profile.configKey] == true
             local projected = nil
 
@@ -245,8 +246,7 @@ local function updateDrawings()
     end
 end
 
--- a single missed scan is tolerated so brief reparenting cannot make the
--- drawings flicker
+-- one missed scan is tolerated so brief reparenting cannot cause flicker
 local function pruneUnmatched(seen)
     for inst in pairs(entries) do
         if seen[inst] then

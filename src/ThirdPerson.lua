@@ -1,9 +1,9 @@
 -- third person camera
--- method "Offset": Roblox's own camera controller pulls the view back through
--- Humanoid.CameraOffset. This never touches the rig, does not fight any camera
--- script and handles wall clipping on its own.
--- method "Push": the older local hack that overwrites Camera.CFrame every frame.
--- It works on any game but may look odd and does not respect walls.
+-- method "Push": overwrites Camera.CFrame each frame. This game runs a custom
+-- (ClassicCamera) controller, so Humanoid.CameraOffset has no effect here and
+-- Push is what actually moves the view behind the rig.
+-- method "Offset": the native Humanoid.CameraOffset route, kept for games that
+-- do respect it.
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
@@ -17,6 +17,27 @@ local ThirdPerson = {
 
 local storedConfig = nil
 local previousCameraMode = nil
+local clipParams = RaycastParams.new()
+clipParams.FilterType = Enum.RaycastFilterType.Exclude
+clipParams.IgnoreWater = true
+
+-- keeps the camera in front of geometry instead of letting it slide through walls
+local function clipDistance(anchor, direction, distance)
+    local camera = Workspace.CurrentCamera
+    if not camera then return distance end
+
+    local character = LocalPlayer.Character or camera
+    if clipParams.FilterDescendantsInstances[1] ~= character then
+        clipParams.FilterDescendantsInstances = character and { character, camera } or { camera }
+    end
+
+    local ok, result = pcall(Workspace.Raycast, Workspace, anchor, direction * distance, clipParams)
+    if ok and result and result.Distance then
+        return math.max(result.Distance - 0.6, 2)
+    end
+
+    return distance
+end
 
 local function getHumanoid()
     local char = LocalPlayer.Character
@@ -63,18 +84,23 @@ local function applyPush(config)
     local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso")
     if not root or not root:IsA("BasePart") then return end
 
-    local ok, rotation = pcall(function() return Workspace.CurrentCamera.CFrame.Rotation end)
+    local camera = Workspace.CurrentCamera
+    if not camera then return end
+
+    local ok, rotation = pcall(function() return camera.CFrame.Rotation end)
     if not ok or not rotation then return end
 
     local head = char:FindFirstChild("Head")
     local headOffsetY = head and (head.Position.Y - root.Position.Y) or 0
 
-    local distance = tonumber(config.THIRDPERSON_DISTANCE) or 9
+    local distanceRaw = tonumber(config.THIRDPERSON_DISTANCE) or 9
     local height = tonumber(config.THIRDPERSON_HEIGHT) or 0
-    local camera = Workspace.CurrentCamera
 
     local anchor = root.Position + Vector3.new(0, headOffsetY + height, 0)
-    local position = anchor + (rotation.LookVector * -distance)
+    local direction = rotation.LookVector * -1
+
+    local distance = clipDistance(anchor, direction, distanceRaw)
+    local position = anchor + (direction * distance)
 
     if camera then
         pcall(function() camera.CFrame = CFrame.new(position) * rotation end)
