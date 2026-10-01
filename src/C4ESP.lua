@@ -1,16 +1,21 @@
 -- c4 esp
 -- Dedicated bomb tracker, kept completely separate from the grenade code.
 --
--- Ground truth from the game dump:
---   * the player carrying the bomb has a "BombHolster" model parented to their
---     character (exactly one exists at a time, same as in CS)
---   * planted / dropped state comes from the local player's own attributes, the
---     same values the reference source reads for its bomb timer block.
+-- Ground truth confirmed in game:
+--   * the carrier has the C4 strapped to the rig (on the back) - it is a
+--     Model/BasePart somewhere inside the character tree, NOT always a
+--     direct "BombHolster" child, so the whole character is scanned
+--   * when the carrier dies the C4 drops into the world (C4 folder / Debris)
+--     and is tracked there too
+--   * planted / dropped state comes from the local player's own attributes
 --
 -- What is drawn:
---   * "C4 Carrier" above whoever is holding the bomb
+--   * "C4 Carrier: <name>" above whoever is carrying the bomb
 --   * a box plus a label on the physical bomb when it is on the ground, and the
 --     remaining timer when it is planted.
+--
+-- Performance: the expensive workspace scans are cached (carrier 0.25s,
+-- world bomb 0.5s, C4 folder list 10s). Never scan the tree every frame.
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
@@ -70,36 +75,63 @@ local function hideAll()
     end
 end
 
--- the bomb carrier is the only character with a BombHolster child
--- Also check for "Bomb" attribute as fallback
+-- the bomb carrier has the C4 strapped to the rig (on the back).
+-- The C4 is a Model/BasePart parented somewhere inside the character - it
+-- is NOT always a direct "BombHolster" child. Scan the whole character
+-- tree for anything named C4 / Bomb, which is what made the earlier
+-- grenade ESP attempt detect it correctly.
 local function findBombCarrier()
     local characters = Workspace:FindFirstChild("Characters")
     if not characters then return nil end
 
     for _, character in ipairs(characters:GetChildren()) do
-        -- Check for BombHolster child (primary method)
-        if character:FindFirstChild("BombHolster") then
-            return character
-        end
-        
-        -- Check for Bomb attribute (fallback)
-        local hasBomb = false
-        pcall(function()
-            hasBomb = (character:GetAttribute("HasBomb") == true) or (character:GetAttribute("Bomb") == true)
-        end)
-        if hasBomb then
-            return character
-        end
-        
-        -- Check player attributes
-        local player = Players:FindFirstChild(character.Name)
-        if player then
-            local playerHasBomb = false
+        if character:IsA("Model") then
+            -- 1. Named holder parented anywhere under the character
+            local holder = nil
             pcall(function()
-                playerHasBomb = (player:GetAttribute("HasBomb") == true) or (player:GetAttribute("Bomb") == true)
+                for _, d in ipairs(character:GetDescendants()) do
+                    if d:IsA("Model") or d:IsA("Folder") or d:IsA("BasePart") then
+                        local n = d.Name:lower()
+                        if n:find("bombholster", 1, true)
+                            or n:find("c4", 1, true)
+                            or n:find("bomb", 1, true) then
+                            holder = d
+                            break
+                        end
+                    end
+                end
             end)
-            if playerHasBomb then
+            if holder then
                 return character
+            end
+        end
+
+        do
+            -- 2. Attribute based fallback (works for any character type)
+            local hasBomb = false
+            pcall(function()
+                hasBomb = (character:GetAttribute("HasBomb") == true)
+                    or (character:GetAttribute("Bomb") == true)
+                    or (character:GetAttribute("HasC4") == true)
+                    or (character:GetAttribute("C4") == true)
+            end)
+            if hasBomb then
+                return character
+            end
+
+            -- 3. Player attribute fallback
+            local player = Players:FindFirstChild(character.Name)
+            if player then
+                local pHas = false
+                pcall(function()
+                    pHas = (player:GetAttribute("HasBomb") == true)
+                        or (player:GetAttribute("Bomb") == true)
+                        or (player:GetAttribute("HasC4") == true)
+                        or (player:GetAttribute("C4") == true)
+                end)
+                if pHas then
+                    return character
+                end
             end
         end
     end
@@ -314,6 +346,9 @@ local function getWorldBombCached()
     return cache.worldBomb
 end
 
+local lastCarrierState = false
+local lastBombState = false
+
 local function update()
     if not storedConfig then return end
 
@@ -337,6 +372,19 @@ local function update()
     -- Use cached scans instead of scanning every frame
     local carrier = getCarrierCached()
 
+    -- One-shot console message when the carrier appears. C4ESP has no
+    -- reference to the UI library, so this uses warn() - it shows up in the
+    -- executor console (F9) and confirms the detection actually fired.
+    if carrier and (not lastCarrierState) then
+        pcall(function()
+            local nm = carrier.Name
+            local pl = Players:FindFirstChild(nm)
+            if pl and pl.DisplayName then nm = pl.DisplayName end
+            warn("[Bloxstrike] C4 ESP carrier detected: " .. tostring(nm))
+        end)
+    end
+    lastCarrierState = carrier and true or false
+
     if carrier then
         drawCarrier(camera, carrier, color)
     else
@@ -351,6 +399,15 @@ local function update()
 
     local planted, timer = bombAttributes()
     local worldBomb = getWorldBombCached()
+
+    -- One-shot console message when the world (dropped) bomb is found
+    if worldBomb and (not lastBombState) then
+        pcall(function()
+            warn("[Bloxstrike] C4 ESP world bomb detected: " .. tostring(worldBomb.Name)
+                .. " (parent: " .. tostring(worldBomb.Parent and worldBomb.Parent.Name) .. ")")
+        end)
+    end
+    lastBombState = worldBomb and true or false
 
     if worldBomb then
         local label
