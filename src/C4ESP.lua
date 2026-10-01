@@ -247,6 +247,7 @@ local function drawCarrier(camera, character, color)
 end
 
 local bombDiagLogged = false
+local bombDrawnNames = {}
 
 local function drawWorldBomb(camera, model, color, label)
     local item = makeItem("World")
@@ -312,6 +313,19 @@ local function drawWorldBomb(camera, model, color, label)
     -- soon as the bomb is more than a few studs away. A constant keeps the
     -- marker readable at any distance.
     local width = 26
+
+    -- Log the resolved screen position once so we can tell whether the marker
+    -- is landing inside the viewport or off screen / behind the camera.
+    if not bombDrawnNames[model] then
+        bombDrawnNames[model] = true
+        pcall(function()
+            warn("[Bloxstrike] C4 ESP drawing world bomb: " .. tostring(model.Name)
+                .. " screen=(" .. tostring(math.floor(screen.X)) .. ", "
+                .. tostring(math.floor(screen.Y)) .. ")"
+                .. " Z=" .. tostring(math.floor(screen.Z))
+                .. " width=" .. tostring(width))
+        end)
+    end
 
     pcall(function()
         item.Box.Position = Vector2.new(screen.X - (width / 2), screen.Y - (width / 2))
