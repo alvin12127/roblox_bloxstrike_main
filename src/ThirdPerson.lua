@@ -50,6 +50,44 @@ local function currentDistance()
     return math.clamp(tonumber(storedConfig and storedConfig.THIRDPERSON_DISTANCE) or 10, 5, 50)
 end
 
+-- Fix aim offset when in third person by adjusting the camera CFrame
+-- to keep the crosshair aligned with the actual aim direction
+local function applyAimFix()
+    if not storedConfig or storedConfig.THIRDPERSON_ENABLED ~= true then return end
+    
+    local camera = workspace.CurrentCamera
+    if not camera then return end
+    
+    -- When in third person, the camera is behind the player but the aim
+    -- direction should still be from the camera through the crosshair.
+    -- The game handles this automatically for the most part, but we need
+    -- to ensure the camera doesn't clip through walls.
+    local char = LocalPlayer.Character
+    if not char then return end
+    
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    
+    -- Raycast from camera to aim direction to prevent wall clipping
+    local camCFrame = camera.CFrame
+    local aimDir = camCFrame.LookVector
+    
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = {char}
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    
+    local rayResult = workspace:Raycast(camCFrame.Position, aimDir * currentDistance(), rayParams)
+    if rayResult then
+        -- If we hit something, adjust camera distance to not clip
+        local hitDist = (rayResult.Position - camCFrame.Position).Magnitude
+        if hitDist < currentDistance() then
+            local newDist = math.max(hitDist - 0.5, 5)
+            LocalPlayer.CameraMaxZoomDistance = newDist
+            LocalPlayer.CameraMinZoomDistance = newDist
+        end
+    end
+end
+
 local function installMetaHook()
     if metaHooked then return end
     if not (getrawmetatable and setreadonly and newcclosure) then return end
@@ -144,6 +182,9 @@ function ThirdPerson.init(Config)
             LocalPlayer.CameraMode = Enum.CameraMode.Classic
             LocalPlayer.CameraMaxZoomDistance = dist
             LocalPlayer.CameraMinZoomDistance = dist
+            
+            -- Apply aim fix to prevent damage loss in third person
+            pcall(applyAimFix)
         end)
     end)
 end

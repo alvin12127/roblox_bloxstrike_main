@@ -1,4 +1,4 @@
--- ui manager
+-- ui manager (arvn-based)
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
@@ -21,15 +21,6 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
     if UIManager.Initialized then return end
     UIManager.Initialized = true
     UIManager.Library = Library
-
-    -- apply theme
-    if Config.UI_THEME then
-        for prop, val in pairs(Config.UI_THEME) do
-            if Library[prop] ~= nil then
-                Library[prop] = val
-            end
-        end
-    end
 
     -- auto save debounce
     local saveDebounce = nil
@@ -54,11 +45,6 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
     local Window = Library:CreateWindow({
         Title = "@Discord_alvin6974. / Bloxstrike / v2.5",
         Center = true,
-        -- Linoria's AutoShow schedules a deferred task.spawn(Library.Toggle).
-        -- Library:Toggle flips the state rather than setting it, so if that
-        -- deferred call lands after the explicit show at the end of this
-        -- function it hides the window again. AutoShow is disabled here and the
-        -- visibility is handled once, on this thread.
         AutoShow = false,
         TabPadding = 6,
         MenuFadeTime = 0.2,
@@ -78,6 +64,7 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         Weapons = Window:AddTab("Weapons"),
         Visuals = Window:AddTab("Visuals"),
         Movement = Window:AddTab("Movement"),
+        World = Window:AddTab("World"),
         Skins = Window:AddTab("Skins"),
         Settings = Window:AddTab("Settings")
     }
@@ -556,6 +543,53 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
+    -- bullet tracer panel
+    local TracerBox = Tabs.Visuals:AddRightGroupbox("Bullet Tracer")
+
+    TracerBox:AddToggle("BulletTracer", {
+        Text = "Enable tracers",
+        Default = (Config.BULLET_TRACER_ENABLED == true),
+        Tooltip = "Draws the flight path of every bullet you fire",
+        Callback = function(Value)
+            updateSetting("BULLET_TRACER_ENABLED", Value)
+        end
+    })
+
+    TracerBox:AddLabel("Tracer color"):AddColorPicker("TracerColor", {
+        Default = Config.BULLET_TRACER_COLOR or Color3.fromRGB(186, 140, 255),
+        Title = "Tracer color",
+        Callback = function(Value)
+            updateSetting("BULLET_TRACER_COLOR", Value)
+        end
+    })
+
+    TracerBox:AddSlider("TracerThickness", {
+        Text = "Line thickness",
+        Default = Config.BULLET_TRACER_THICKNESS or 1.5,
+        Min = 0.1,
+        Max = 6,
+        Rounding = 1,
+        Compact = false,
+        Suffix = " px",
+        Callback = function(Value)
+            updateSetting("BULLET_TRACER_THICKNESS", Value)
+        end
+    })
+
+    TracerBox:AddSlider("TracerDuration", {
+        Text = "Fade time",
+        Default = (Config.BULLET_TRACER_DURATION or 0.6) * 10,
+        Min = 1,
+        Max = 30,
+        Rounding = 0,
+        Compact = false,
+        Suffix = " (x0.1s)",
+        Tooltip = "How long the tracer stays on screen before it fades out",
+        Callback = function(Value)
+            updateSetting("BULLET_TRACER_DURATION", Value / 10)
+        end
+    })
+
     -- chams panel
     local ChamsBox = Tabs.Visuals:AddLeftGroupbox("Chams")
 
@@ -693,53 +727,6 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
-    -- bullet tracer panel
-    local TracerBox = Tabs.Visuals:AddRightGroupbox("Bullet Tracer")
-
-    TracerBox:AddToggle("BulletTracer", {
-        Text = "Enable tracers",
-        Default = (Config.BULLET_TRACER_ENABLED == true),
-        Tooltip = "Draws the flight path of every bullet you fire",
-        Callback = function(Value)
-            updateSetting("BULLET_TRACER_ENABLED", Value)
-        end
-    })
-
-    TracerBox:AddLabel("Tracer color"):AddColorPicker("TracerColor", {
-        Default = Config.BULLET_TRACER_COLOR or Color3.fromRGB(186, 140, 255),
-        Title = "Tracer color",
-        Callback = function(Value)
-            updateSetting("BULLET_TRACER_COLOR", Value)
-        end
-    })
-
-    TracerBox:AddSlider("TracerThickness", {
-        Text = "Line thickness",
-        Default = Config.BULLET_TRACER_THICKNESS or 1.5,
-        Min = 0.1,
-        Max = 6,
-        Rounding = 1,
-        Compact = false,
-        Suffix = " px",
-        Callback = function(Value)
-            updateSetting("BULLET_TRACER_THICKNESS", Value)
-        end
-    })
-
-    TracerBox:AddSlider("TracerDuration", {
-        Text = "Fade time",
-        Default = (Config.BULLET_TRACER_DURATION or 0.6) * 10,
-        Min = 1,
-        Max = 30,
-        Rounding = 0,
-        Compact = false,
-        Suffix = " (x0.1s)",
-        Tooltip = "How long the tracer stays on screen before it fades out",
-        Callback = function(Value)
-            updateSetting("BULLET_TRACER_DURATION", Value / 10)
-        end
-    })
-
     -- movement tab
     local MoveMain = Tabs.Movement:AddLeftGroupbox("Movement Physics")
 
@@ -849,6 +836,103 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         Callback = function(Value)
             updateSetting("NO_SPREAD", Value)
             if WeaponEngine and WeaponEngine.sync then WeaponEngine.sync(Config) end
+        end
+    })
+
+    -- spin bot, anti aim and third person
+    local AimControl = Tabs.Movement:AddRightGroupbox("Spin Bot & Anti Aim")
+
+    AimControl:AddToggle("SpinBotToggle", {
+        Text = "Spin bot",
+        Default = (Config.SPINBOT_ENABLED == true),
+        Tooltip = "Spins the local rig continuously. Only affects what is shown on screen.",
+        Callback = function(Value)
+            updateSetting("SPINBOT_ENABLED", Value)
+        end
+    })
+
+    AimControl:AddSlider("SpinBotRpm", {
+        Text = "Spin speed",
+        Default = Config.SPINBOT_RPM or 600,
+        Min = 60,
+        Max = 3000,
+        Rounding = 0,
+        Compact = false,
+        Suffix = " RPM",
+        Callback = function(Value)
+            updateSetting("SPINBOT_RPM", Value)
+        end
+    })
+
+    AimControl:AddToggle("AntiAimToggle", {
+        Text = "Anti aim",
+        Default = (Config.ANTIAIM_ENABLED == true),
+        Tooltip = "Tilts the local rig so the head is harder to read",
+        Callback = function(Value)
+            updateSetting("ANTIAIM_ENABLED", Value)
+        end
+    })
+
+    AimControl:AddDropdown("AntiAimYawBase", {
+        Values = { "Off", "Spin", "Jitter", "Random" },
+        Default = Config.ANTIAIM_YAW_BASE or "Off",
+        Multi = false,
+        Text = "Yaw base",
+        Tooltip = "Off: No yaw modification\nSpin: Continuous rotation\nJitter: Random jitter\nRandom: Random yaw",
+        Callback = function(Value)
+            updateSetting("ANTIAIM_YAW_BASE", Value)
+        end
+    })
+
+    AimControl:AddSlider("AntiAimYawOffset", {
+        Text = "Yaw offset",
+        Default = Config.ANTIAIM_YAW_OFFSET or 0,
+        Min = -180,
+        Max = 180,
+        Rounding = 0,
+        Compact = false,
+        Suffix = "°",
+        Callback = function(Value)
+            updateSetting("ANTIAIM_YAW_OFFSET", Value)
+        end
+    })
+
+    AimControl:AddSlider("AntiAimSpinSpeed", {
+        Text = "Spin speed",
+        Default = Config.ANTIAIM_SPIN_SPEED or 360,
+        Min = 30,
+        Max = 720,
+        Rounding = 0,
+        Compact = false,
+        Suffix = "°/s",
+        Callback = function(Value)
+            updateSetting("ANTIAIM_SPIN_SPEED", Value)
+        end
+    })
+
+    AimControl:AddSlider("AntiAimJitterOffset", {
+        Text = "Jitter offset",
+        Default = Config.ANTIAIM_JITTER_OFFSET or 30,
+        Min = 5,
+        Max = 90,
+        Rounding = 0,
+        Compact = false,
+        Suffix = "°",
+        Callback = function(Value)
+            updateSetting("ANTIAIM_JITTER_OFFSET", Value)
+        end
+    })
+
+    AimControl:AddSlider("AntiAimPitch", {
+        Text = "Pitch",
+        Default = Config.ANTIAIM_PITCH or 60,
+        Min = 0,
+        Max = 120,
+        Rounding = 0,
+        Compact = false,
+        Suffix = "°",
+        Callback = function(Value)
+            updateSetting("ANTIAIM_PITCH", Value)
         end
     })
 
@@ -1227,6 +1311,54 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
             updateSetting("MOTION_BLUR_STRENGTH", Value)
         end
     })
+
+    -- third person section
+    local ThirdPersonBox = WorldTab:AddRightGroupbox("Third Person")
+
+    ThirdPersonBox:AddToggle("ThirdPersonToggle", {
+        Text = "Third person",
+        Default = (Config.THIRDPERSON_ENABLED == true),
+        Tooltip = "Pulls the camera back behind the rig. Mouse look is unaffected.",
+        Callback = function(Value)
+            updateSetting("THIRDPERSON_ENABLED", Value)
+        end
+    })
+
+    ThirdPersonBox:AddSlider("ThirdPersonDistance", {
+        Text = "Distance",
+        Default = Config.THIRDPERSON_DISTANCE or 9,
+        Min = 4,
+        Max = 40,
+        Rounding = 0,
+        Compact = false,
+        Suffix = " studs",
+        Callback = function(Value)
+            updateSetting("THIRDPERSON_DISTANCE", Value)
+        end
+    })
+
+    ThirdPersonBox:AddSlider("ThirdPersonHeight", {
+        Text = "Height offset",
+        Default = Config.THIRDPERSON_HEIGHT or 0,
+        Min = -6,
+        Max = 10,
+        Rounding = 0,
+        Compact = false,
+        Suffix = " studs",
+        Callback = function(Value)
+            updateSetting("THIRDPERSON_HEIGHT", Value)
+        end
+    })
+
+    ThirdPersonBox:AddToggle("ThirdPersonGuard", {
+        Text = "Camera lock guard",
+        Default = (Config.THIRDPERSON_GUARD ~= false),
+        Tooltip = "Stops the game forcing first person back. Turn off if it ever interferes with another script.",
+        Callback = function(Value)
+            updateSetting("THIRDPERSON_GUARD", Value)
+        end
+    })
+
     -- skins tab
     local SkinsBox = Tabs.Skins:AddLeftGroupbox("Skin Changer")
     SkinsBox:AddToggle("AutoLaunchSkinchanger", {
@@ -1292,152 +1424,6 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         Tooltip = "Executes the standalone Skinchanger (local/GitHub)"
     })
 
-
-
-
-    -- spin bot, anti aim and third person
-    local AimControl = Tabs.Movement:AddRightGroupbox("Spin Bot & Anti Aim")
-
-    AimControl:AddToggle("SpinBotToggle", {
-        Text = "Spin bot",
-        Default = (Config.SPINBOT_ENABLED == true),
-        Tooltip = "Spins the local rig continuously. Only affects what is shown on screen.",
-        Callback = function(Value)
-            updateSetting("SPINBOT_ENABLED", Value)
-        end
-    })
-
-    AimControl:AddSlider("SpinBotRpm", {
-        Text = "Spin speed",
-        Default = Config.SPINBOT_RPM or 600,
-        Min = 60,
-        Max = 3000,
-        Rounding = 0,
-        Compact = false,
-        Suffix = " RPM",
-        Callback = function(Value)
-            updateSetting("SPINBOT_RPM", Value)
-        end
-    })
-
-    AimControl:AddToggle("AntiAimToggle", {
-        Text = "Anti aim",
-        Default = (Config.ANTIAIM_ENABLED == true),
-        Tooltip = "Tilts the local rig so the head is harder to read",
-        Callback = function(Value)
-            updateSetting("ANTIAIM_ENABLED", Value)
-        end
-    })
-
-    AimControl:AddDropdown("AntiAimYawBase", {
-        Values = { "Off", "Spin", "Jitter", "Random" },
-        Default = Config.ANTIAIM_YAW_BASE or "Off",
-        Multi = false,
-        Text = "Yaw base",
-        Tooltip = "Off: No yaw modification\nSpin: Continuous rotation\nJitter: Random jitter\nRandom: Random yaw",
-        Callback = function(Value)
-            updateSetting("ANTIAIM_YAW_BASE", Value)
-        end
-    })
-
-    AimControl:AddSlider("AntiAimYawOffset", {
-        Text = "Yaw offset",
-        Default = Config.ANTIAIM_YAW_OFFSET or 0,
-        Min = -180,
-        Max = 180,
-        Rounding = 0,
-        Compact = false,
-        Suffix = "°",
-        Callback = function(Value)
-            updateSetting("ANTIAIM_YAW_OFFSET", Value)
-        end
-    })
-
-    AimControl:AddSlider("AntiAimSpinSpeed", {
-        Text = "Spin speed",
-        Default = Config.ANTIAIM_SPIN_SPEED or 360,
-        Min = 30,
-        Max = 720,
-        Rounding = 0,
-        Compact = false,
-        Suffix = "°/s",
-        Callback = function(Value)
-            updateSetting("ANTIAIM_SPIN_SPEED", Value)
-        end
-    })
-
-    AimControl:AddSlider("AntiAimJitterOffset", {
-        Text = "Jitter offset",
-        Default = Config.ANTIAIM_JITTER_OFFSET or 30,
-        Min = 5,
-        Max = 90,
-        Rounding = 0,
-        Compact = false,
-        Suffix = "°",
-        Callback = function(Value)
-            updateSetting("ANTIAIM_JITTER_OFFSET", Value)
-        end
-    })
-
-    AimControl:AddSlider("AntiAimPitch", {
-        Text = "Pitch",
-        Default = Config.ANTIAIM_PITCH or 60,
-        Min = 0,
-        Max = 120,
-        Rounding = 0,
-        Compact = false,
-        Suffix = "°",
-        Callback = function(Value)
-            updateSetting("ANTIAIM_PITCH", Value)
-        end
-    })
-
-    local ThirdPersonBox = WorldTab:AddRightGroupbox("Third Person")
-
-    ThirdPersonBox:AddToggle("ThirdPersonToggle", {
-        Text = "Third person",
-        Default = (Config.THIRDPERSON_ENABLED == true),
-        Tooltip = "Pulls the camera back behind the rig. Mouse look is unaffected.",
-        Callback = function(Value)
-            updateSetting("THIRDPERSON_ENABLED", Value)
-        end
-    })
-
-    ThirdPersonBox:AddSlider("ThirdPersonDistance", {
-        Text = "Distance",
-        Default = Config.THIRDPERSON_DISTANCE or 9,
-        Min = 4,
-        Max = 40,
-        Rounding = 0,
-        Compact = false,
-        Suffix = " studs",
-        Callback = function(Value)
-            updateSetting("THIRDPERSON_DISTANCE", Value)
-        end
-    })
-
-    ThirdPersonBox:AddSlider("ThirdPersonHeight", {
-        Text = "Height offset",
-        Default = Config.THIRDPERSON_HEIGHT or 0,
-        Min = -6,
-        Max = 10,
-        Rounding = 0,
-        Compact = false,
-        Suffix = " studs",
-        Callback = function(Value)
-            updateSetting("THIRDPERSON_HEIGHT", Value)
-        end
-    })
-
-    ThirdPersonBox:AddToggle("ThirdPersonGuard", {
-        Text = "Camera lock guard",
-        Default = (Config.THIRDPERSON_GUARD ~= false),
-        Tooltip = "Stops the game forcing first person back. Turn off if it ever interferes with another script.",
-        Callback = function(Value)
-            updateSetting("THIRDPERSON_GUARD", Value)
-        end
-    })
-
     -- settings tab
     local MenuGroup = Tabs.Settings:AddLeftGroupbox("Keybinds")
     local ActionsGroup = Tabs.Settings:AddRightGroupbox("Actions")
@@ -1461,7 +1447,7 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         Text = "Silent aim bind",
         ChangedCallback = function(NewKey)
             local key = nil
-            if NewKey and NewKey ~= "None" then
+            for NewKey and NewKey ~= "None" do
                 if NewKey == "MB1" or NewKey == "MB2" or NewKey == "MB3" then
                     key = NewKey
                 else
@@ -1579,7 +1565,7 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
             if Toggles.ThirdPersonToggle then Toggles.ThirdPersonToggle:SetValue(Config.THIRDPERSON_ENABLED) end
             if Options.ThirdPersonDistance then Options.ThirdPersonDistance:SetValue(Config.THIRDPERSON_DISTANCE or 9) end
             if Options.ThirdPersonHeight then Options.ThirdPersonHeight:SetValue(Config.THIRDPERSON_HEIGHT or 0) end
-    if Toggles.ThirdPersonGuard then Toggles.ThirdPersonGuard:SetValue(Config.THIRDPERSON_GUARD ~= false) end
+            if Toggles.ThirdPersonGuard then Toggles.ThirdPersonGuard:SetValue(Config.THIRDPERSON_GUARD ~= false) end
             if Toggles.KnifeChanger then Toggles.KnifeChanger:SetValue(Config.KNIFE_SKINS_ENABLED ~= false) end
             if Toggles.WeaponChanger then Toggles.WeaponChanger:SetValue(Config.WEAPON_SKINS_ENABLED ~= false) end
             if Options.KnifeModel then Options.KnifeModel:SetValue(Config.KNIFE_MODEL or "Butterfly Knife") end

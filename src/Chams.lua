@@ -267,17 +267,20 @@ end
 -- target validation ---------------------------------------------------------
 
 local function resolveCharacter(player)
-    if Utils and type(Utils.getAliveCharacter) == "function" then
-        local ok, char = pcall(function()
-            return Utils.getAliveCharacter(player)
-        end)
+    -- Try player.Character first (most reliable)
+    local okChar, char = pcall(function()
+        local direct = player.Character
+        if direct and direct:IsA("Model") and direct:GetAttribute("Dead") ~= true then
+            return direct
+        end
+        return nil
+    end)
 
-        if ok and char then return char end
-    end
+    if okChar and char then return char end
 
     -- Fallback: the game keeps every rig under Workspace.Characters, named
     -- after its player.
-    local okChar, char = pcall(function()
+    okChar, char = pcall(function()
         local charsFolder = Workspace:FindFirstChild("Characters")
         if charsFolder then
             local found = charsFolder:FindFirstChild(player.Name)
@@ -285,16 +288,19 @@ local function resolveCharacter(player)
                 return found
             end
         end
-
-        local direct = player.Character
-        if direct and direct:IsA("Model") and direct:GetAttribute("Dead") ~= true then
-            return direct
-        end
-
         return nil
     end)
 
     if okChar and char then return char end
+
+    -- Last resort: Utils
+    if Utils and type(Utils.getAliveCharacter) == "function" then
+        local ok, utilsChar = pcall(function()
+            return Utils.getAliveCharacter(player)
+        end)
+        if ok and utilsChar then return utilsChar end
+    end
+
     return nil
 end
 
