@@ -1079,6 +1079,17 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     end)
 
+    -- Linoria shows the menu with a deferred task.spawn(Library.Toggle). If that
+    -- spawned thread cannot write to Instances, the window is created but never
+    -- becomes visible, so the toggle is run here on the script's own thread too.
+    if Config.MENU_OPEN ~= false then
+        pcall(function()
+            if (not Library.Toggled) and Library.Toggle then
+                Library:Toggle()
+            end
+        end)
+    end
+
     Library:Notify("@Discord_alvin6974. / Bloxstrike / v2.5 Loaded!", 3)
 end
 
