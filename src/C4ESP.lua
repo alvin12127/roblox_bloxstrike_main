@@ -139,88 +139,68 @@ local function findBombCarrier()
     return nil
 end
 
+-- Name matching: the scan technique is taken from the GrenadeESP module
+-- (workspace scan by name substring) but the hints are deliberately NARROW.
+-- The old grenade attempt matched grenade/smoke/molotov/flash too, which made
+-- it flag everything and got it scrapped. Only C4 / bomb names are accepted
+-- here so the bomb is tracked without the noise.
+local BOMB_HINTS = {
+    "c4", "bomb", "bombholster"
+}
+
 local function isBombName(name)
     if type(name) ~= "string" then return false end
+    local lower = name:lower()
 
-    if name == "C4" then return true end
-
-    if name:lower():find("bomb", 1, true) then return true end
+    for _, hint in ipairs(BOMB_HINTS) do
+        if lower:find(hint, 1, true) then
+            return true
+        end
+    end
 
     return false
 end
 
--- the physical bomb, anything outside the characters folder
--- From dump: C4 folder exists in Workspace, and BombHolster is a Model parented to character
--- Cached C4 folder list. Map layout does not change mid-round, so this is
--- resolved once and refreshed rarely instead of walking the Workspace tree
--- on every scan.
-local c4FolderCache = nil
-local c4FolderCacheTime = 0
-local C4_FOLDER_TTL = 10
+-- The physical bomb. Uses the GrenadeESP scan technique: walk the workspace
+-- three levels deep and match by name substring. Characters are excluded so
+-- the carrier's rig is never mistaken for a dropped bomb (the carrier is
+-- handled separately by findBombCarrier).
+local function findWorldBomb()
+    local charsFolder = Workspace:FindFirstChild("Characters")
+    local foundBomb = nil
 
-local function getC4Folders()
-    local now = os.clock()
-    if c4FolderCache and ((now - c4FolderCacheTime) < C4_FOLDER_TTL) then
-        return c4FolderCache
+    local function matches(inst)
+        if not inst then return false end
+        if not (inst:IsA("BasePart") or inst:IsA("Model")) then return false end
+        -- skip anything parented under a player rig
+        if charsFolder and inst:IsDescendantOf(charsFolder) then return false end
+        return isBombName(inst.Name)
     end
 
-    local found = {}
     pcall(function()
-        local function scan(container, depth)
-            if not container or depth > 3 then return end
-            for _, child in ipairs(container:GetChildren()) do
-                if child:IsA("Folder") and child.Name == "C4" then
-                    table.insert(found, child)
-                elseif child:IsA("Folder") and depth < 3 then
-                    -- only descend into plain folders, skip deep/huge trees
-                    scan(child, depth + 1)
+        for _, child in ipairs(Workspace:GetChildren()) do
+            if child ~= charsFolder then
+                if matches(child) then
+                    foundBomb = child
+                    return
+                end
+                for _, sub in ipairs(child:GetChildren()) do
+                    if matches(sub) then
+                        foundBomb = sub
+                        return
+                    end
+                    for _, leaf in ipairs(sub:GetChildren()) do
+                        if matches(leaf) then
+                            foundBomb = leaf
+                            return
+                        end
+                    end
                 end
             end
         end
-        scan(Workspace, 0)
     end)
 
-    -- Prune folders that were removed
-    local alive = {}
-    for _, f in ipairs(found) do
-        if f and f.Parent then table.insert(alive, f) end
-    end
-
-    c4FolderCache = alive
-    c4FolderCacheTime = now
-    return alive
-end
-
--- shallow search of a container for a bomb model (depth-limited, cheap)
-local function shallowScan(container)
-    if not container then return nil end
-    for _, child in ipairs(container:GetChildren()) do
-        if isBombName(child.Name) then
-            if child:IsA("Model") or child:IsA("BasePart") or child:IsA("Folder") then
-                return child
-            end
-        end
-    end
-    return nil
-end
-
--- the physical bomb, outside the characters folder
-local function findWorldBomb()
-    -- 1. Known C4 folders (cheap, cached list)
-    for _, c4Folder in ipairs(getC4Folders()) do
-        local found = shallowScan(c4Folder)
-        if found then return found end
-    end
-
-    -- 2. Debris / dropped items (cheap, top level only)
-    local debris = Workspace:FindFirstChild("Debris")
-    if debris then
-        local found = shallowScan(debris)
-        if found then return found end
-    end
-
-    -- 3. Workspace top level only (no deep recursion - keeps FPS stable)
-    return shallowScan(Workspace)
+    return foundBomb
 end
 
 local function bombAttributes()
@@ -348,6 +328,7 @@ end
 
 local lastCarrierState = false
 local lastBombState = false
+local debugLogged = false
 
 local function update()
     if not storedConfig then return end
@@ -355,6 +336,35 @@ local function update()
     -- Default to enabled if not explicitly disabled
     local enabled = storedConfig.C4_ESP_ENABLED
     if enabled == nil then enabled = true end
+
+    -- One-shot diagnostics so it is clear whether the feature is on and how
+    -- many characters were inspected for the bomb.
+    if not debugLogged then
+        debugLogged = true
+        pcall(function()
+            local chars = Workspace:FindFirstChild("Characters")
+            local n = chars and #chars:GetChildren() or 0
+            warn("[Bloxstrike] C4 ESP: enabled=" .. tostring(enabled)
+                .. " charactersFolder=" .. tostring(chars ~= nil)
+                .. " characters=" .. tostring(n))
+
+            if chars then
+                for _, c in ipairs(chars:GetChildren()) do
+                    local names = {}
+                    for _, d in ipairs(c:GetDescendants()) do
+                        local ln = d.Name:lower()
+                        if ln:find("bomb", 1, true) or ln:find("c4", 1, true) then
+                            table.insert(names, d.Name)
+                        end
+                    end
+                    if #names > 0 then
+                        warn("[Bloxstrike] C4 ESP: '" .. tostring(c.Name)
+                            .. "' has bomb parts: " .. table.concat(names, ", "))
+                    end
+                end
+            end
+        end)
+    end
 
     if not enabled then
         hideAll()

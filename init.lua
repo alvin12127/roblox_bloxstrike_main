@@ -175,9 +175,14 @@ local function cleanup()
     Chams.cleanup()
     InstantReload.cleanup()
 
-    -- Cleanup skinchanger
-    if SkinChanger and SkinChanger.API and SkinChanger.API.cleanup then
-        pcall(SkinChanger.API.cleanup)
+    -- Cleanup skinchanger (UI + engine)
+    if SkinChanger then
+        if SkinChanger.UIManager and SkinChanger.UIManager.cleanup then
+            pcall(SkinChanger.UIManager.cleanup)
+        end
+        if SkinChanger.API and SkinChanger.API.cleanup then
+            pcall(SkinChanger.API.cleanup)
+        end
     end
     SkinChanger = nil
 
@@ -193,7 +198,9 @@ reportInit("UIManager", function()
     UIManager.init(Config, Arvn, nil, WeaponEngine, cleanup, HitSound)
 end)
 
--- Load skinchanger integrated into main window
+-- Load skinchanger. It runs on its own LinoriaLib instance (separate window)
+-- because the Knife/Gun catalogs need Linoria's Create/CreateLabel API and
+-- Tab.TabFrame to render the 3D skin previews.
 reportInit("SkinChanger", function()
     -- Skinchanger has its own module directory - load from there
     local scModules = {}
@@ -242,20 +249,39 @@ reportInit("SkinChanger", function()
     local scKnifeCatalog = scImport("KnifeCatalog")
     local scGunCatalog   = scImport("GunCatalog")
     local scGloveCatalog = scImport("GloveCatalog")
+    local scLinoria      = scImport("LinoriaLib")
     local scUIManager    = scImport("UIManager")
 
     scAPI.bind(scConfig, scDatabase, scEngine, scKnifeCatalog, scGunCatalog)
-    scAPI.bindGloveCatalog(scGloveCatalog)
+    if scAPI.bindGloveCatalog then
+        scAPI.bindGloveCatalog(scGloveCatalog)
+    end
     scAPI.init()
+
+    -- Bind the catalogs before init so the visual 3D UI gets built
+    scUIManager.bindCatalogs(scKnifeCatalog, scGunCatalog)
 
     SkinChanger = {
         API = scAPI,
         UIManager = scUIManager,
-        Config = scConfig
+        Config = scConfig,
+        Library = scLinoria
     }
 
-    -- Pass the main window so skinchanger adds tabs to it
-    scUIManager.init(scConfig, Arvn, scAPI, scDatabase, scKnifeCatalog, scGunCatalog, scGloveCatalog, UIManager.Window)
+    -- Dedicated skinchanger teardown. The skinchanger's own Unload button
+    -- must only close the skinchanger, never tear down the whole cheat.
+    local function scCleanup()
+        pcall(function() scUIManager.cleanup() end)
+        pcall(function() scAPI.cleanup() end)
+        SkinChanger = nil
+        _G.SkinChanger = nil
+    end
+
+    -- Initialise the skinchanger with its OWN LinoriaLib instance.
+    -- The catalogs require Library:Create / CreateLabel and Tab.TabFrame,
+    -- which arvn does not provide - Linoria is what makes the 3D skin
+    -- previews render.
+    scUIManager.init(scConfig, scLinoria, scAPI, scDatabase, scCleanup)
 
     _G.SkinChanger = scAPI
 end)
