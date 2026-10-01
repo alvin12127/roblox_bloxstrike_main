@@ -516,19 +516,10 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
-    VisualSettings:AddToggle("GrenadeEsp", {
-        Text = "Grenade ESP",
-        Default = (Config.GRENADE_ESP_ENABLED == true),
-        Tooltip = "Shows thrown grenades, flashes and smokes on the map",
-        Callback = function(Value)
-            updateSetting("GRENADE_ESP_ENABLED", Value)
-        end
-    })
-
     VisualSettings:AddToggle("C4Esp", {
         Text = "C4 ESP",
         Default = (Config.C4_ESP_ENABLED == true),
-        Tooltip = "Shows C4, bombs and planted explosives separately from grenades",
+        Tooltip = "Marks the player carrying the bomb, and the bomb itself on the ground or planted",
         Callback = function(Value)
             updateSetting("C4_ESP_ENABLED", Value)
         end
@@ -935,7 +926,6 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
             if Toggles.ItemEsp then Toggles.ItemEsp:SetValue(Config.ITEM_ESP_ENABLED ~= false) end
             if Toggles.BoxEsp then Toggles.BoxEsp:SetValue(Config.BOX_ESP_ENABLED ~= false) end
             if Toggles.BoxCornersOnly then Toggles.BoxCornersOnly:SetValue(Config.BOX_ESP_CORNERS_ONLY ~= false) end
-            if Toggles.GrenadeEsp then Toggles.GrenadeEsp:SetValue(Config.GRENADE_ESP_ENABLED) end
             if Toggles.C4Esp then Toggles.C4Esp:SetValue(Config.C4_ESP_ENABLED) end
             if Toggles.ViewAngle then Toggles.ViewAngle:SetValue(Config.VIEWANGLE_ENABLED) end
             if Toggles.OffscreenArrows then Toggles.OffscreenArrows:SetValue(Config.OFFSCREEN_ARROWS) end
