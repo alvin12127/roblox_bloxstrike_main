@@ -119,58 +119,76 @@ end
 
 -- the physical bomb, anything outside the characters folder
 -- From dump: C4 folder exists in Workspace, and BombHolster is a Model parented to character
--- find C4 folders recursively in workspace
-local function findC4Folders()
+-- Cached C4 folder list. Map layout does not change mid-round, so this is
+-- resolved once and refreshed rarely instead of walking the Workspace tree
+-- on every scan.
+local c4FolderCache = nil
+local c4FolderCacheTime = 0
+local C4_FOLDER_TTL = 10
+
+local function getC4Folders()
+    local now = os.clock()
+    if c4FolderCache and ((now - c4FolderCacheTime) < C4_FOLDER_TTL) then
+        return c4FolderCache
+    end
+
     local found = {}
-    local function scan(container, depth)
-        if not container or depth > 4 then return end
-        for _, child in ipairs(container:GetChildren()) do
-            if child:IsA("Folder") and child.Name == "C4" then
-                table.insert(found, child)
-            end
-            if child:IsA("Folder") or child:IsA("Model") then
-                scan(child, depth + 1)
+    pcall(function()
+        local function scan(container, depth)
+            if not container or depth > 3 then return end
+            for _, child in ipairs(container:GetChildren()) do
+                if child:IsA("Folder") and child.Name == "C4" then
+                    table.insert(found, child)
+                elseif child:IsA("Folder") and depth < 3 then
+                    -- only descend into plain folders, skip deep/huge trees
+                    scan(child, depth + 1)
+                end
             end
         end
+        scan(Workspace, 0)
+    end)
+
+    -- Prune folders that were removed
+    local alive = {}
+    for _, f in ipairs(found) do
+        if f and f.Parent then table.insert(alive, f) end
     end
-    scan(Workspace, 0)
-    return found
+
+    c4FolderCache = alive
+    c4FolderCacheTime = now
+    return alive
 end
 
--- recursively search a container for a bomb model
-local function deepScan(container, depth)
-    if not container or depth > 5 then return nil end
-
+-- shallow search of a container for a bomb model (depth-limited, cheap)
+local function shallowScan(container)
+    if not container then return nil end
     for _, child in ipairs(container:GetChildren()) do
-        if child:IsA("Model") and isBombName(child.Name) then
-            return child
-        end
-        if child:IsA("Folder") or child:IsA("Model") then
-            local found = deepScan(child, depth + 1)
-            if found then return found end
+        if isBombName(child.Name) then
+            if child:IsA("Model") or child:IsA("BasePart") or child:IsA("Folder") then
+                return child
+            end
         end
     end
-
     return nil
 end
 
--- the physical bomb, anything outside the characters folder
+-- the physical bomb, outside the characters folder
 local function findWorldBomb()
-    -- 1. C4 folders first (from dump analysis)
-    for _, c4Folder in ipairs(findC4Folders()) do
-        local found = deepScan(c4Folder, 0)
+    -- 1. Known C4 folders (cheap, cached list)
+    for _, c4Folder in ipairs(getC4Folders()) do
+        local found = shallowScan(c4Folder)
         if found then return found end
     end
 
-    -- 2. Debris / dropped items
+    -- 2. Debris / dropped items (cheap, top level only)
     local debris = Workspace:FindFirstChild("Debris")
     if debris then
-        local found = deepScan(debris, 0)
+        local found = shallowScan(debris)
         if found then return found end
     end
 
-    -- 3. Whole workspace fallback
-    return deepScan(Workspace, 0)
+    -- 3. Workspace top level only (no deep recursion - keeps FPS stable)
+    return shallowScan(Workspace)
 end
 
 local function bombAttributes()
@@ -254,13 +272,55 @@ local function drawWorldBomb(camera, model, color, label)
     end)
 end
 
+-- Cache the expensive workspace scans. The recursive scan must NOT run
+-- every frame - it walks the whole Workspace tree and tanks performance.
+-- Results are refreshed on a timer instead.
+local cache = {
+    carrier = nil,
+    carrierValid = false,
+    worldBomb = nil,
+    worldBombValid = false,
+    lastCarrierScan = 0,
+    lastBombScan = 0
+}
+
+local CARRIER_INTERVAL = 0.25
+local BOMB_INTERVAL = 0.5
+
+local function getCarrierCached()
+    local now = os.clock()
+    if (not cache.carrierValid) or ((now - cache.lastCarrierScan) >= CARRIER_INTERVAL) then
+        cache.carrierValid = true
+        cache.lastCarrierScan = now
+        cache.carrier = findBombCarrier()
+    end
+    -- Drop the cached instance if it was removed from the game
+    if cache.carrier and (not cache.carrier.Parent) then
+        cache.carrier = nil
+    end
+    return cache.carrier
+end
+
+local function getWorldBombCached()
+    local now = os.clock()
+    if (not cache.worldBombValid) or ((now - cache.lastBombScan) >= BOMB_INTERVAL) then
+        cache.worldBombValid = true
+        cache.lastBombScan = now
+        cache.worldBomb = findWorldBomb()
+    end
+    if cache.worldBomb and (not cache.worldBomb.Parent) then
+        cache.worldBomb = nil
+    end
+    return cache.worldBomb
+end
+
 local function update()
     if not storedConfig then return end
 
     -- Default to enabled if not explicitly disabled
     local enabled = storedConfig.C4_ESP_ENABLED
     if enabled == nil then enabled = true end
-    
+
     if not enabled then
         hideAll()
         return
@@ -274,7 +334,8 @@ local function update()
 
     local color = Color3.fromRGB(255, 70, 70)
 
-    local carrier = findBombCarrier()
+    -- Use cached scans instead of scanning every frame
+    local carrier = getCarrierCached()
 
     if carrier then
         drawCarrier(camera, carrier, color)
@@ -289,7 +350,7 @@ local function update()
     end
 
     local planted, timer = bombAttributes()
-    local worldBomb = findWorldBomb()
+    local worldBomb = getWorldBombCached()
 
     if worldBomb then
         local label

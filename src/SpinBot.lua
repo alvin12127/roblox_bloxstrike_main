@@ -1,9 +1,14 @@
 -- spin bot and anti aim
--- Rotates the local rig on Heartbeat. The game uses a custom character
--- system (ReplicatedStorage.Classes.Character) that rewrites the root
--- transform every frame, so we also disable Humanoid.AutoRotate and
--- preserve the assembly velocity to stop the physics solver from
--- snapping the rig back before the rotation is visible.
+-- Rotates the local rig. Applied in a late RenderStep bind (same trick the
+-- third person camera uses) because the game drives its character rig
+-- through a custom controller that overwrites the root transform every
+-- frame. Writing after the camera priority means our rotation survives
+-- until the frame is drawn.
+--
+-- Two extra guards keep the rotation from being fought:
+--   * Humanoid.AutoRotate is disabled while active (restored on cleanup)
+--   * AssemblyLinearVelocity is preserved so the physics solver does not
+--     snap the rig back right after the CFrame write.
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
@@ -12,7 +17,8 @@ local LocalPlayer = Players.LocalPlayer
 
 local SpinBot = {
     Initialized = false,
-    Connection = nil
+    Connection = nil,
+    StepName = "Bloxstrike_SpinBot"
 }
 
 local storedConfig = nil
@@ -44,9 +50,26 @@ local function applyEffects()
     if not char or not char.Parent then return end
     if char:GetAttribute("Dead") == true then return end
 
+    -- Try every plausible root part name. The game may use a custom rig
+    -- where the standard HumanoidRootPart is absent.
     local root = char:FindFirstChild("HumanoidRootPart")
         or char:FindFirstChild("UpperTorso")
         or char:FindFirstChild("Torso")
+        or char:FindFirstChild("LowerTorso")
+        or char.PrimaryPart
+
+    if not root or not root:IsA("BasePart") then
+        -- Last resort: any BasePart in the character
+        pcall(function()
+            for _, p in ipairs(char:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    root = p
+                    break
+                end
+            end
+        end)
+    end
+
     if not root or not root:IsA("BasePart") then return end
 
     -- Stop the stock controller from fighting our yaw
@@ -122,12 +145,24 @@ function SpinBot.init(Config)
     storedConfig = Config
     lastTime = os.clock()
 
-    SpinBot.Connection = RunService.Heartbeat:Connect(function()
-        pcall(applyEffects)
+    -- Use a late RenderStep bind instead of Heartbeat. The game drives its
+    -- character rig through its own controller (Classes.Character) which
+    -- overwrites the root transform every frame. Binding after the camera
+    -- priority is what made the third person camera stick, so the rotation
+    -- is applied last and survives until it is drawn.
+    pcall(function()
+        RunService:BindToRenderStep(SpinBot.StepName, Enum.RenderPriority.Last.Value + 3, function()
+            pcall(applyEffects)
+        end)
     end)
 end
 
 function SpinBot.cleanup()
+    -- Unbind the render step (the connection field is no longer used)
+    pcall(function()
+        RunService:UnbindFromRenderStep(SpinBot.StepName)
+    end)
+
     if SpinBot.Connection then
         pcall(function() SpinBot.Connection:Disconnect() end)
         SpinBot.Connection = nil
