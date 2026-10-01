@@ -502,12 +502,30 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
+    VisualSettings:AddToggle("BoxCornersOnly", {
+        Text = "Corner only",
+        Default = (Config.BOX_ESP_CORNERS_ONLY ~= false),
+        Tooltip = "Renders only the four corners of the box instead of the full outline",
+        Callback = function(Value)
+            updateSetting("BOX_ESP_CORNERS_ONLY", Value)
+        end
+    })
+
     VisualSettings:AddToggle("GrenadeEsp", {
         Text = "Grenade ESP",
         Default = (Config.GRENADE_ESP_ENABLED == true),
-        Tooltip = "Shows thrown grenades and other explosive objects on the map",
+        Tooltip = "Shows thrown grenades, flashes and smokes on the map",
         Callback = function(Value)
             updateSetting("GRENADE_ESP_ENABLED", Value)
+        end
+    })
+
+    VisualSettings:AddToggle("C4Esp", {
+        Text = "C4 ESP",
+        Default = (Config.C4_ESP_ENABLED == true),
+        Tooltip = "Shows C4, bombs and planted explosives separately from grenades",
+        Callback = function(Value)
+            updateSetting("C4_ESP_ENABLED", Value)
         end
     })
 
@@ -741,6 +759,17 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
+    CameraBox:AddDropdown("ThirdPersonMethod", {
+        Values = { "Offset", "Push" },
+        Default = Config.THIRDPERSON_METHOD or "Offset",
+        Multi = false,
+        Text = "Method",
+        Tooltip = "Offset: native Humanoid.CameraOffset, safest, respects walls.\nPush: overwrites the camera directly, works on any game but does not respect walls.",
+        Callback = function(Value)
+            updateSetting("THIRDPERSON_METHOD", (Value == "Push") and "Push" or "Offset")
+        end
+    })
+
     CameraBox:AddSlider("ThirdPersonDistance", {
         Text = "Distance",
         Default = Config.THIRDPERSON_DISTANCE or 9,
@@ -876,7 +905,9 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
             if Toggles.NameEsp then Toggles.NameEsp:SetValue(Config.NAME_ESP_ENABLED ~= false) end
             if Toggles.ItemEsp then Toggles.ItemEsp:SetValue(Config.ITEM_ESP_ENABLED ~= false) end
             if Toggles.BoxEsp then Toggles.BoxEsp:SetValue(Config.BOX_ESP_ENABLED ~= false) end
+            if Toggles.BoxCornersOnly then Toggles.BoxCornersOnly:SetValue(Config.BOX_ESP_CORNERS_ONLY ~= false) end
             if Toggles.GrenadeEsp then Toggles.GrenadeEsp:SetValue(Config.GRENADE_ESP_ENABLED) end
+            if Toggles.C4Esp then Toggles.C4Esp:SetValue(Config.C4_ESP_ENABLED) end
             if Toggles.ViewAngle then Toggles.ViewAngle:SetValue(Config.VIEWANGLE_ENABLED) end
             if Toggles.OffscreenArrows then Toggles.OffscreenArrows:SetValue(Config.OFFSCREEN_ARROWS) end
             if Toggles.TargetPartHl then Toggles.TargetPartHl:SetValue(Config.BODYPART_TARGET_HL) end

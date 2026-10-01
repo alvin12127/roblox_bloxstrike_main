@@ -106,8 +106,18 @@ function SkeletonRenderer.create()
         NameText = Drawing.new("Text"),
         ItemText = Drawing.new("Text"),
         Box = Drawing.new("Square"),
+        BoxLines = {},
         Arrow = Drawing.new("Triangle")
     }
+
+    -- corner-only mode needs the box in eight segments: two per corner
+    for i = 1, 8 do
+        local seg = Drawing.new("Line")
+        seg.Thickness = 1.5
+        seg.ZIndex = 2
+        seg.Visible = false
+        obj.BoxLines[i] = seg
+    end
 
     for i = 1, #BONE_PAIRS do
         local line = Drawing.new("Line")
@@ -203,6 +213,11 @@ function SkeletonRenderer.hide(drawObj)
     if drawObj.NameText then drawObj.NameText.Visible = false end
     if drawObj.ItemText then drawObj.ItemText.Visible = false end
     if drawObj.Box then drawObj.Box.Visible = false end
+    if drawObj.BoxLines then
+        for _, seg in ipairs(drawObj.BoxLines) do
+            seg.Visible = false
+        end
+    end
     if drawObj.Arrow then drawObj.Arrow.Visible = false end
 end
 
@@ -216,6 +231,11 @@ function SkeletonRenderer.destroy(drawObj)
     if drawObj.NameText then pcall(function() drawObj.NameText:Remove() end) end
     if drawObj.ItemText then pcall(function() drawObj.ItemText:Remove() end) end
     if drawObj.Box then pcall(function() drawObj.Box:Remove() end) end
+    if drawObj.BoxLines then
+        for _, seg in ipairs(drawObj.BoxLines) do
+            pcall(function() seg:Remove() end)
+        end
+    end
     if drawObj.Arrow then pcall(function() drawObj.Arrow:Remove() end) end
 end
 
@@ -354,15 +374,60 @@ function SkeletonRenderer.render(drawObj, char, health, maxHealth, boneColor, ba
 
     -- box esp (cube)
     if drawObj.Box then
+        local cornersOnly = (Config and Config.BOX_ESP_CORNERS_ONLY == true)
         local showBox = (not Config or Config.BOX_ESP_ENABLED ~= false) and anyVisible
 
-        drawObj.Box.Visible = showBox
+        pcall(function() drawObj.Box.Visible = showBox and (not cornersOnly) end)
 
-        if showBox then
-            drawObj.Box.Position = Vector2.new(minX - 5, minY - 5)
-            drawObj.Box.Size = Vector2.new((maxX - minX) + 10, (maxY - minY) + 10)
-            drawObj.Box.Color = boneColor
-            drawObj.Box.Thickness = 1.5
+        if showBox and (not cornersOnly) then
+            pcall(function()
+                drawObj.Box.Position = Vector2.new(minX - 5, minY - 5)
+                drawObj.Box.Size = Vector2.new((maxX - minX) + 10, (maxY - minY) + 10)
+                drawObj.Box.Color = boneColor
+                drawObj.Box.Thickness = 1.5
+            end)
+        end
+
+        -- corner only rendering with eight segments
+        local linesEnabled = showBox and cornersOnly
+        if linesEnabled then
+            local x1, y1 = minX - 5, minY - 5
+            local x2, y2 = maxX + 5, maxY + 5
+            local width = x2 - x1
+            local height = y2 - y1
+            local arm = math.floor(math.min(width, height) * 0.3)
+            arm = math.max(arm, 8)
+
+            local segs = {
+                { Vector2.new(x1, y1), Vector2.new(x1 + arm, y1) },
+                { Vector2.new(x1, y1), Vector2.new(x1, y1 + arm) },
+
+                { Vector2.new(x2, y1), Vector2.new(x2 - arm, y1) },
+                { Vector2.new(x2, y1), Vector2.new(x2, y1 + arm) },
+
+                { Vector2.new(x1, y2), Vector2.new(x1 + arm, y2) },
+                { Vector2.new(x1, y2), Vector2.new(x1, y2 - arm) },
+
+                { Vector2.new(x2, y2), Vector2.new(x2 - arm, y2) },
+                { Vector2.new(x2, y2), Vector2.new(x2, y2 - arm) }
+            }
+
+            for i = 1, #segs do
+                local seg = drawObj.BoxLines[i]
+                if seg then
+                    pcall(function()
+                        seg.From = segs[i][1]
+                        seg.To = segs[i][2]
+                        seg.Color = boneColor
+                        seg.Thickness = 1.5
+                        seg.Visible = true
+                    end)
+                end
+            end
+        elseif drawObj.BoxLines then
+            for _, seg in ipairs(drawObj.BoxLines) do
+                pcall(function() seg.Visible = false end)
+            end
         end
     end
 

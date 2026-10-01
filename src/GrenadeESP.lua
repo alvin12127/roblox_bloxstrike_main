@@ -1,11 +1,15 @@
--- grenade esp
--- Traces grenades anywhere in the workspace. Grenades are matched by name hints
--- because the game does not expose a type marker; Config.GRENADE_NAMES can be
--- used to add further names without touching this module.
+-- grenade and c4 esp
+-- Thrown objects are matched purely by name hints because the game does not
+-- mark them. Two independent profiles are maintained: "grenade" and "c4", each
+-- own toggle and color. Anything carried by a player is skipped, nested matches
+-- (a model plus its parts) are collapsed to the outermost instance, and matches
+-- are limited to a radius so static map props far away stay out of the way.
 
 local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 
+local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
 local GrenadeESP = {
@@ -15,31 +19,58 @@ local GrenadeESP = {
 
 local storedConfig = nil
 
-local HINTS = {
-    "grenade", "granade", "flash", "smoke", "molotov",
-    "incendiary", "cesar", "spike", "c4", "bomb"
+local PROFILES = {
+    grenade = {
+        hints = { "grenade", "granade", "flash", "smoke", "molotov", "incendiary", "cesar", "spike" },
+        color = Color3.fromRGB(255, 190, 70),
+        configKey = "GRENADE_ESP_ENABLED"
+    },
+    c4 = {
+        hints = { "c4", "bomb", "explosive", "planted", "defuse" },
+        color = Color3.fromRGB(255, 70, 70),
+        configKey = "C4_ESP_ENABLED"
+    }
 }
 
 local SCAN_INTERVAL = 0.25
 local GRACE_MISSES = 2
 
-local drawings = {}   -- [instance] = { Box, Text }
-local missCount = {}  -- [instance] = how many consecutive scans missed it
+local entries = {}     -- [instance] = { Box, Text, category }
+local missCount = {}   -- [instance] = consecutive scans without a match
 local lastScan = 0
 
-local function isGrenadeName(name)
-    if type(name) ~= "string" then return false end
+local function hintsFor(category)
+    local fromConfig = storedConfig and storedConfig.GRENADE_NAMES
+
+    if type(fromConfig) ~= "table" or #fromConfig == 0 then
+        return PROFILES[category].hints
+    end
+
+    -- Config.GRENADE_NAMES applies to the grenade profile only
+    if category == "grenade" then
+        return fromConfig
+    end
+
+    return PROFILES[category].hints
+end
+
+local function matchCategory(name)
+    if type(name) ~= "string" then return nil end
     local lower = name:lower()
 
-    local hints = (storedConfig and type(storedConfig.GRENADE_NAMES) == "table") and storedConfig.GRENADE_NAMES or HINTS
+    -- pairs() is unordered, so c4 is checked first on purpose to keep a name
+    -- that matches both profiles from flickering between categories
+    local order = { "c4", "grenade" }
 
-    for _, hint in ipairs(hints) do
-        if type(hint) == "string" and hint ~= "" and lower:find(hint, 1, true) then
-            return true
+    for _, category in ipairs(order) do
+        for _, hint in ipairs(hintsFor(category)) do
+            if type(hint) == "string" and hint ~= "" and lower:find(hint, 1, true) then
+                return category
+            end
         end
     end
 
-    return false
+    return nil
 end
 
 local function getWorldPosition(inst)
@@ -51,20 +82,43 @@ local function getWorldPosition(inst)
     return part and part.Position or nil
 end
 
--- thrown or placed objects sit anywhere under the workspace; anything carried by
--- a player is filtered out through the characters folder
-local function scanForGrenades()
+local function withinRange(position)
+    local camera = Workspace.CurrentCamera
+    if not camera then return false end
+
+    local limit = tonumber(storedConfig and storedConfig.GRENADE_ESP_MAX_DIST) or 300
+    return (position - camera.CFrame.Position).Magnitude <= limit
+end
+
+-- anything nested under an instance that already matched is collapsed, which is
+-- what stops a single smoke from showing up as several drawings at once
+local function hasMatchedAncestor(inst, seen)
+    local parent = inst.Parent
+
+    while parent and parent ~= Workspace do
+        if seen[parent] then return true end
+        parent = parent.Parent
+    end
+
+    return false
+end
+
+local function scanForObjects()
     local charsFolder = Workspace:FindFirstChild("Characters")
-    local seen = {}
+    local matched = {}
 
     local function consider(inst)
-        if (not inst) or seen[inst] then return end
-
+        if (not inst) or matched[inst] then return end
         if not (inst:IsA("BasePart") or inst:IsA("Model")) then return end
         if charsFolder and inst:IsDescendantOf(charsFolder) then return end
-        if not isGrenadeName(inst.Name) then return end
 
-        seen[inst] = true
+        local category = matchCategory(inst.Name)
+        if not category then return end
+
+        local position = getWorldPosition(inst)
+        if not position or not withinRange(position) then return end
+
+        matched[inst] = category
     end
 
     for _, child in ipairs(Workspace:GetChildren()) do
@@ -81,12 +135,23 @@ local function scanForGrenades()
         end
     end
 
-    return seen
+    -- collapse nested matches
+    local collapsed = {}
+    for inst, category in pairs(matched) do
+        if not hasMatchedAncestor(inst, matched) then
+            collapsed[inst] = category
+        end
+    end
+
+    return collapsed
 end
 
-local function ensureDrawings(inst)
-    local set = drawings[inst]
-    if set then return set end
+local function ensureDrawings(inst, category)
+    local set = entries[inst]
+    if set then
+        set.category = category
+        return set
+    end
 
     local okBox, box = pcall(function() return Drawing.new("Square") end)
     local okText, text = pcall(function() return Drawing.new("Text") end)
@@ -99,49 +164,57 @@ local function ensureDrawings(inst)
 
     box.Filled = false
     box.Thickness = 1.2
-    box.Color = Color3.fromRGB(255, 190, 70)
     box.ZIndex = 4
     box.Visible = false
 
     text.Size = 12
     text.Center = true
-    text.Color = Color3.fromRGB(255, 190, 70)
     text.Outline = false
     text.ZIndex = 5
     text.Visible = false
 
-    set = { Box = box, Text = text }
-    drawings[inst] = set
+    set = { Box = box, Text = text, category = category }
+    entries[inst] = set
     missCount[inst] = 0
 
     return set
 end
 
 local function releaseDrawings(inst)
-    local set = drawings[inst]
+    local set = entries[inst]
     if not set then return end
 
     pcall(function() set.Box:Remove() end)
     pcall(function() set.Text:Remove() end)
 
-    drawings[inst] = nil
+    entries[inst] = nil
     missCount[inst] = nil
 end
 
-local function updateDrawings()
-    local enabled = storedConfig and (storedConfig.GRENADE_ESP_ENABLED == true)
+local function setEnabled(set, on)
+    if set then
+        pcall(function() set.Box.Visible = on end)
+        pcall(function() set.Text.Visible = on end)
+    end
+end
 
-    for inst, set in pairs(drawings) do
-        if not inst or inst.Parent == nil then
+local function updateDrawings()
+    local camera = Workspace.CurrentCamera
+    if not camera then return end
+
+    for inst, set in pairs(entries) do
+        if (not inst) or inst.Parent == nil then
             releaseDrawings(inst)
         else
+            local profile = PROFILES[set.category] or PROFILES.grenade
+            local enabled = storedConfig and storedConfig[profile.configKey] == true
             local projected = nil
 
             if enabled then
                 local position = getWorldPosition(inst)
 
                 if position then
-                    local ok, sp = pcall(Camera.WorldToViewportPoint, Camera, position)
+                    local ok, sp = pcall(camera.WorldToViewportPoint, camera, position)
                     if ok and sp and (sp.Z > 0.01) then
                         projected = sp
                     end
@@ -150,26 +223,32 @@ local function updateDrawings()
 
             if projected then
                 local size = 26
+                local color = profile.color
 
-                set.Box.Position = Vector2.new(projected.X - (size / 2), projected.Y - (size / 2))
-                set.Box.Size = Vector2.new(size, size)
-                set.Box.Visible = true
+                pcall(function()
+                    set.Box.Position = Vector2.new(projected.X - (size / 2), projected.Y - (size / 2))
+                    set.Box.Size = Vector2.new(size, size)
+                    set.Box.Color = color
+                    set.Box.Visible = true
+                end)
 
-                set.Text.Text = inst.Name
-                set.Text.Position = Vector2.new(projected.X, projected.Y - ((size / 2) + 3))
-                set.Text.Visible = true
+                pcall(function()
+                    set.Text.Text = inst.Name
+                    set.Text.Position = Vector2.new(projected.X, projected.Y - ((size / 2) + 3))
+                    set.Text.Color = color
+                    set.Text.Visible = true
+                end)
             else
-                set.Box.Visible = false
-                set.Text.Visible = false
+                setEnabled(set, false)
             end
         end
     end
 end
 
--- a single missed scan is tolerated so brief reparenting does not make the
+-- a single missed scan is tolerated so brief reparenting cannot make the
 -- drawings flicker
 local function pruneUnmatched(seen)
-    for inst in pairs(drawings) do
+    for inst in pairs(entries) do
         if seen[inst] then
             missCount[inst] = 0
         else
@@ -197,11 +276,11 @@ function GrenadeESP.init(Config)
             if (now - lastScan) >= SCAN_INTERVAL then
                 lastScan = now
 
-                local seen = scanForGrenades()
+                local seen = scanForObjects()
                 pruneUnmatched(seen)
 
-                for inst in pairs(seen) do
-                    ensureDrawings(inst)
+                for inst, category in pairs(seen) do
+                    ensureDrawings(inst, category)
                 end
             end
 
@@ -216,11 +295,11 @@ function GrenadeESP.cleanup()
         GrenadeESP.Connection = nil
     end
 
-    for inst in pairs(drawings) do
+    for inst in pairs(entries) do
         releaseDrawings(inst)
     end
 
-    drawings = {}
+    entries = {}
     missCount = {}
     lastScan = 0
     storedConfig = nil
