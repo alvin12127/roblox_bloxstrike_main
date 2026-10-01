@@ -1,7 +1,10 @@
 -- bullet tracer visuals
--- Draws the flight path of every bullet we fire. Every drawing property write is
--- guarded, because executor drawing implementations differ and a single failing
--- assign would otherwise kill the whole call silently.
+-- Every drawing property write is pcall protected, because executor drawing
+-- implementations differ and one failing assign would otherwise end the whole
+-- call silently. Transparency is convention dependent in drawing libraries
+-- (some treat 1 as opaque, some treat it as invisible), so the fade is done
+-- through thickness which behaves the same everywhere, and 0.5 stays visible
+-- under either convention.
 
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
@@ -13,19 +16,15 @@ local BulletTracer = {
 
 local active = {}   -- [line] = { expire, duration, baseThickness }
 local pool = {}
-local warnedUnavailable = false
-local warnedReasons = {}
 
--- reports a blocking condition once per reason so the console stays readable
-local function warnOnce(reason)
-    warnedReasons[reason] = (warnedReasons[reason] or 0) + 1
-    if warnedReasons[reason] > 3 then return end
-
-    pcall(warn, "[Bloxstrike] Bullet tracer skipped: " .. reason)
+-- diagnostics only fire a handful of times so the console stays readable
+local diagnostics = {}
+local function log(count, message)
+    diagnostics[message] = (diagnostics[message] or 0) + 1
+    if diagnostics[message] > count then return end
+    pcall(warn, "[Bloxstrike] tracer " .. message)
 end
 
--- some drawing implementations do not implement every optional property, so
--- optional level setters get their own pcall while the required ones are relied on
 local function safeSet(obj, property, value)
     pcall(function() obj[property] = value end)
 end
@@ -35,14 +34,12 @@ local function acquireLine()
     if line then return line end
 
     local ok, created = pcall(function() return Drawing.new("Line") end)
-    if ok and created then return created end
-
-    if not warnedUnavailable then
-        warnedUnavailable = true
-        pcall(warn, "[Bloxstrike] Drawing.new('Line') unavailable - bullet tracers disabled")
+    if not ok or not created then
+        log(3, "unavailable: Drawing.new('Line') failed")
+        return nil
     end
 
-    return nil
+    return created
 end
 
 local function releaseLine(line)
@@ -64,10 +61,8 @@ function BulletTracer.init(Config)
                 active[line] = nil
                 releaseLine(line)
             else
-                -- thickness is used for the fade because Transparency behaves the
-                -- opposite way in some drawing implementations
                 local fraction = math.clamp(remaining / info.duration, 0, 1)
-                safeSet(line, "Thickness", math.max(info.baseThickness * fraction, 0.15))
+                safeSet(line, "Thickness", math.max(info.baseThickness * fraction, 0.12))
             end
         end
     end)
@@ -82,20 +77,27 @@ function BulletTracer.push(hitData, Config)
     local direction = hitData.Direction
     local distance = hitData.Distance
 
-    if typeof(origin) ~= "Vector3" or typeof(direction) ~= "Vector3" then
-        warnOnce("unexpected hit data geometry")
+    if type(origin) ~= "Vector3" or type(direction) ~= "Vector3" then
+        log(3, "unexpected geometry: origin/direction not Vector3")
         return
     end
 
     distance = tonumber(distance) or 0
-
-    if distance <= 0 then warnOnce("zero distance") return end
+    if distance <= 0 then
+        log(3, "unexpected geometry: distance <= 0")
+        return
+    end
 
     local line = acquireLine()
     if not line then return end
 
+    -- fetched per call: CurrentCamera can be recreated on respawn
     local camera = Workspace.CurrentCamera
-    if not camera then releaseLine(line) warnOnce("no camera") return end
+    if not camera then
+        releaseLine(line)
+        log(3, "no current camera")
+        return
+    end
 
     local endPoint = origin + (direction * distance)
 
@@ -113,38 +115,41 @@ function BulletTracer.push(hitData, Config)
 
     if (not okStart) or (not okTo) or (not startSp) or (not toSp) then
         releaseLine(line)
+        log(3, "projection failed")
         return
     end
 
     if startSp.Z <= 0.01 or toSp.Z <= 0.01 then
         releaseLine(line)
-        warnOnce("behind camera projection")
+        log(3, "projection behind camera")
         return
     end
 
     local duration = Config.BULLET_TRACER_DURATION or 0.6
     local thickness = Config.BULLET_TRACER_THICKNESS or 1.5
-    local color = Config.BULLET_TRACER_COLOR or Color3.fromRGB(186, 140, 255)
+    local color = Config.BULLET_TRACER_COLOR
 
-    -- every property write is pcall-protected: some drawing libraries reject a
-    -- zero thickness or an unsupported optional property
+    -- required properties first, optional ones after
     pcall(function()
         line.From = Vector2.new(startSp.X, startSp.Y)
         line.To = Vector2.new(toSp.X, toSp.Y)
+        line.Color = color or Color3.fromRGB(186, 140, 255)
+        line.Thickness = thickness
+        line.Visible = true
     end)
 
-    safeSet(line, "Color", color)
-    safeSet(line, "Thickness", thickness)
     safeSet(line, "ZIndex", 6)
-    safeSet(line, "Transparency", 1)
 
-    pcall(function() line.Visible = true end)
+    -- 0.5 is visible under either transparency convention
+    safeSet(line, "Transparency", 0.5)
 
     active[line] = {
         expire = os.clock() + duration,
         duration = duration,
         baseThickness = thickness
     }
+
+    log(3, "drew ok")
 end
 
 function BulletTracer.cleanup()
@@ -163,6 +168,7 @@ function BulletTracer.cleanup()
     end
     pool = {}
 
+    diagnostics = {}
     BulletTracer.Initialized = false
 end
 

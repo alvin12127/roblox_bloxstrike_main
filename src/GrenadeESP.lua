@@ -1,11 +1,14 @@
 -- grenade and c4 esp
--- Ground truth from the game dump: thrown grenades are Parts/Models that carry
--- the exact inventory weapon name ("Smoke Grenade", "HE Grenade", "Flashbang",
--- "Molotov", "Incendiary Grenade", "Decoy Grenade") and the detonating smoke
--- cloud is a Folder whose name starts with "VoxelSmoke". Matching is exact on
--- purpose, which is why dropped rifles on the ground are never picked up.
+-- Ground truth from the game dump: every thrown grenade lives inside one of a
+-- handful of containers that always sit a few levels under the workspace, so the
+-- scan only walks those branches instead of the whole map:
 --
--- Two independent profiles with their own toggles and colors: grenade and c4.
+--   [Folder] GrenadeParticles  ->  parts named "Smoke Grenade", "HE Grenade",
+--                                  "Flashbang", "Molotov", "Decoy Grenade"
+--   [Folder] VoxelSmoke_<id>   ->  the detonated smoke cloud (marker = folder)
+--   [Folder] C4                ->  the planted / dropped bomb model
+--
+-- Two independent profiles with their own toggles and colors.
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
@@ -37,33 +40,35 @@ local PROFILES = {
     }
 }
 
--- the smoke cloud carries an extra marker neither profile covers exactly
 local CLOUD_PREFIX = "voxelsmoke"
 
+local CONTAINER_HINTS = { "grenadeparticles", "voxelsmoke", "c4" }
+
 local SCAN_INTERVAL = 0.25
-local MAX_DEPTH = 5
+local FIND_DEPTH = 5
 local GRACE_MISSES = 2
+local PROXIMITY_THRESHOLD = 40
 
 local entries = {}     -- [instance] = { Box, Text, category }
 local missCount = {}   -- [instance] = consecutive scans without a match
+local matchedNow = {}  -- rebuilt on every scan
 local lastScan = 0
 
+-- exact name match only. Substring matching was what made dropped rifles and
+-- unrelated props register as grenades.
+-- needs to sit above matchCategory so the reference is a real upvalue and not
+-- the global slot, which would be nil at runtime
 local function resolveProfile(category)
     return PROFILES[category] or PROFILES.grenade
-end
-
-local function isCloudName(name)
-    return type(name) == "string" and name:lower():sub(1, #CLOUD_PREFIX) == CLOUD_PREFIX
 end
 
 local function matchCategory(name)
     local lower = type(name) == "string" and name:lower() or ""
 
-    if isCloudName(name) then
+    if lower:sub(1, #CLOUD_PREFIX) == CLOUD_PREFIX then
         return "grenade"
     end
 
-    -- "c4" first so a name that could belong to both profiles stays stable
     local order = { "c4", "grenade" }
 
     for _, category in ipairs(order) do
@@ -75,6 +80,35 @@ local function matchCategory(name)
     end
 
     return nil
+end
+
+local function isCloudName(name)
+    local lower = type(name) == "string" and name:lower() or ""
+    return lower:sub(1, #CLOUD_PREFIX) == CLOUD_PREFIX
+end
+
+local function isContainerName(name)
+    local lower = type(name) == "string" and name:lower() or ""
+
+    for _, hint in ipairs(CONTAINER_HINTS) do
+        if lower:find(hint, 1, true) then return true end
+    end
+
+    return false
+end
+
+local function containerCategory(containerName)
+    local lower = type(containerName) == "string" and containerName:lower() or ""
+
+    if lower:sub(1, #CLOUD_PREFIX) == CLOUD_PREFIX then
+        return "grenade"
+    end
+
+    if lower:find("c4", 1, true) then
+        return "c4"
+    end
+
+    return "grenade"
 end
 
 local function getWorldPosition(inst)
@@ -94,57 +128,112 @@ local function withinRange(position)
     return (position - camera.CFrame.Position).Magnitude <= limit
 end
 
-local function hasMatchedAncestor(inst, seen)
-    local parent = inst.Parent
-
-    while parent and parent ~= Workspace do
-        if seen[parent] then return true end
-        parent = parent.Parent
-    end
-
-    return false
+-- if a name matches both profiles, "c4" has to win or the marker would flicker
+local function categorize(childName, fallback)
+    local category = matchCategory(childName)
+    return category or fallback
 end
 
--- depth limited traversal: grenades only live a few levels under the workspace
--- and a full descendants() walk is far too costly on large maps
+-- walk a container's contents and mark every object that belongs to its profile
+local function collectFrom(container, containerCategory, depth)
+    -- the smoke cloud is a folder with no position of its own, so the folder
+    -- itself is the marker and its first base part supplies the coordinates
+    if isCloudName(container.Name) then
+        local position = getWorldPosition(container)
+        if position and withinRange(position) then
+            matchedNow = matchedNow or {}
+            matchedNow[container] = "grenade"
+        end
+        return
+    end
+
+    for _, child in ipairs(container:GetChildren()) do
+        if child:IsA("BasePart") or child:IsA("Model") then
+            local position = getWorldPosition(child)
+
+            if position and withinRange(position) then
+                local category = categorize(child.Name, containerCategory)
+                if not matchedNow then matchedNow = {} end
+                matchedNow[child] = category
+            end
+        end
+
+        -- one extra level so a model (like the C4 "Weapon" rig) exposes its parts
+        if depth < 2 then
+            collectFrom(child, containerCategory, depth + 1)
+        end
+    end
+end
+
+-- depth limited traversal with branch pruning: only folders and models are
+-- descended into, which keeps the cost on large maps down to almost nothing
 local function scanForObjects()
     local charsFolder = Workspace:FindFirstChild("Characters")
-    local matched = {}
+    matchedNow = nil
 
-    local function walk(inst, depth)
-        if depth > MAX_DEPTH then return end
-        if not inst then return end
+    local function search(inst, depth)
+        if depth > FIND_DEPTH or (not inst) then return end
 
         for _, child in ipairs(inst:GetChildren()) do
-            if child ~= charsFolder then
-                -- Carried gear lives inside a character, so cut that branch off
-                if not (charsFolder and child:IsDescendantOf(charsFolder)) then
-                    local category = matchCategory(child.Name)
-
-                    if category then
-                        local position = getWorldPosition(child)
-                        if position and withinRange(position) then
-                            matched[child] = category
-                        end
-                    end
-
-                    walk(child, depth + 1)
+            if child ~= charsFolder and not (charsFolder and child:IsDescendantOf(charsFolder)) then
+                if isContainerName(child.Name) then
+                    collectFrom(child, containerCategory(child.Name), 0)
+                elseif depth < 3 and (child:IsA("Folder") or child:IsA("Model")) then
+                    search(child, depth + 1)
                 end
             end
         end
     end
 
-    walk(Workspace, 0)
+    search(Workspace, 0)
+    return matchedNow or {}
+end
 
-    -- collapse nested matches so a single smoke never shows up twice
-    local collapsed = {}
+-- nested matches collapse to the outermost instance, and markers that sit right
+-- on top of each other collapse too, so one smoke is always a single drawing
+local function collapseMatches(matched)
+    local outermost = {}
     for inst, category in pairs(matched) do
-        if not hasMatchedAncestor(inst, matched) then
-            collapsed[inst] = category
+        local parent = inst.Parent
+        local nested = false
+
+        while parent and parent ~= Workspace do
+            if matched[parent] then
+                nested = true
+                break
+            end
+            parent = parent.Parent
+        end
+
+        if not nested then
+            outermost[inst] = category
         end
     end
 
-    return collapsed
+    local keep = {}
+    local taken = {}
+
+    for inst, category in pairs(outermost) do
+        if not taken[inst] then
+            keep[inst] = category
+            taken[inst] = true
+
+            local position = getWorldPosition(inst)
+
+            for other, otherCategory in pairs(outermost) do
+                if (not taken[other]) and (otherCategory == category) then
+                    local otherPosition = getWorldPosition(other)
+
+                    if position and otherPosition and
+                        (otherPosition - position).Magnitude <= PROXIMITY_THRESHOLD then
+                        taken[other] = true
+                    end
+                end
+            end
+        end
+    end
+
+    return keep
 end
 
 local function ensureDrawings(inst, category)
@@ -192,13 +281,6 @@ local function releaseDrawings(inst)
     missCount[inst] = nil
 end
 
-local function setEnabled(set, on)
-    if set then
-        pcall(function() set.Box.Visible = on end)
-        pcall(function() set.Text.Visible = on end)
-    end
-end
-
 local function updateDrawings()
     local camera = Workspace.CurrentCamera
     if not camera then return end
@@ -240,13 +322,14 @@ local function updateDrawings()
                     set.Text.Visible = true
                 end)
             else
-                setEnabled(set, false)
+                pcall(function() set.Box.Visible = false end)
+                pcall(function() set.Text.Visible = false end)
             end
         end
     end
 end
 
--- one missed scan is tolerated so brief reparenting cannot cause flicker
+-- one missed scan is tolerated, so a brief reparenting cannot cause flicker
 local function pruneUnmatched(seen)
     for inst in pairs(entries) do
         if seen[inst] then
@@ -276,7 +359,7 @@ function GrenadeESP.init(Config)
             if (now - lastScan) >= SCAN_INTERVAL then
                 lastScan = now
 
-                local seen = scanForObjects()
+                local seen = collapseMatches(scanForObjects())
                 pruneUnmatched(seen)
 
                 for inst, category in pairs(seen) do

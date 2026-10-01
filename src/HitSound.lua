@@ -11,6 +11,8 @@ local Workspace = game:GetService("Workspace")
 
 local LocalPlayer = Players.LocalPlayer
 
+local LocalPlayer = Players.LocalPlayer
+
 local HitSound = {
     Initialized = false,
     Sounds = {},
@@ -253,10 +255,22 @@ function HitSound.resolveAsset(Config)
     if named then
         local entry = HitSound.findEntry(selected)
         local fileName = (entry and entry.file) or selected
-        return resolveFile(fileName)
+
+        local asset = resolveFile(fileName)
+        if asset then return asset end
+
+        -- fall back to the first built-in id before giving up entirely
+        for _, candidate in ipairs(HitSound.BUILTIN_SOUNDS) do
+            if candidate.defaultId then
+                local fallback = HitSound.normalizeAsset(candidate.defaultId)
+                if fallback then return fallback end
+            end
+        end
+
+        return nil
     end
 
-    -- no explicit selection: fall back to the first built-in id
+    -- no explicit selection: the first built-in id is a safe default
     for _, entry in ipairs(HitSound.BUILTIN_SOUNDS) do
         if entry.defaultId then
             return HitSound.normalizeAsset(entry.defaultId)
@@ -282,16 +296,90 @@ function HitSound.setVolume(level)
 end
 
 -- (re)builds the rotating sound pool, returns ok + status message
--- builds the pool without ever leaving it empty: the new instances are created
--- first and the old ones are only discarded once we know creation succeeded.
--- Some threads (for example task.spawn) cannot call Instance.new at all, and in
--- that case we keep whatever pool is already alive instead of losing the sound.
+-- Builds the pool without ever leaving it empty: the new instances are created
+-- first and the old ones are only discarded once creation succeeded.
+
+-- checks whether an asset can actually be loaded right now. Fresh uploads sit
+-- in "Asset has not been reviewed" until Roblox moderates them and ids that no
+-- longer exist answer "not found"; both mean we must not use that source.
+local function isPlayable(assetId)
+    local okSound, probe = pcall(Instance.new, "Sound")
+    if (not okSound) or (not probe) then return false end
+
+    pcall(function()
+        probe.SoundId = assetId
+        probe.Volume = 0
+        probe.Parent = SoundService
+    end)
+
+    local status = nil
+    pcall(function()
+        ContentProvider:PreloadAsync({ probe }, function(_assetId, fetchStatus)
+            status = fetchStatus
+        end)
+    end)
+
+    pcall(function() probe:Destroy() end)
+
+    if type(status) ~= "EnumItem" then return false end
+    return status == Enum.AssetFetchStatus.Success
+end
+
+-- ordered by priority: the picked sound first, then everything else that might
+-- still work, so a sound stuck in moderation never leaves the user mute
+function HitSound.assetCandidates(Config)
+    local candidates = {}
+
+    local function add(asset)
+        if type(asset) == "string" and asset ~= "" then
+            table.insert(candidates, asset)
+        end
+    end
+
+    local selected = Config.HITSOUND_FILE
+    local named = (type(selected) == "string") and (selected ~= "") and (selected ~= HitSound.CUSTOM_VALUE)
+
+    if named then
+        add(assetIdFor(Config, selected))
+        local entry = HitSound.findEntry(selected)
+        if entry and entry.defaultId then
+            add(HitSound.normalizeAsset(entry.defaultId))
+        end
+        add(resolveFile((entry and entry.file) or selected))
+    end
+
+    add(HitSound.normalizeAsset(Config.HITSOUND_ASSET_ID))
+
+    -- every other built-in id, then any local file still lying around
+    for _, entry in ipairs(HitSound.BUILTIN_SOUNDS) do
+        if entry.defaultId and entry.key ~= selected then
+            add(HitSound.normalizeAsset(entry.defaultId))
+        end
+    end
+
+    for _, entry in ipairs(HitSound.BUILTIN_SOUNDS) do
+        if entry.file then
+            add(resolveFile(entry.file))
+        end
+    end
+
+    return candidates
+end
+
 function HitSound.build(Config)
-    local asset = HitSound.resolveAsset(Config)
+    local asset = nil
+
+    for _, candidate in ipairs(HitSound.assetCandidates(Config)) do
+        if isPlayable(candidate) then
+            asset = candidate
+            break
+        end
+    end
+
     HitSound.CurrentAsset = asset
 
     if not asset then
-        return false, "No usable audio source"
+        return false, "No playable audio source"
     end
 
     local created = {}
