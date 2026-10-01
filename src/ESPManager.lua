@@ -109,20 +109,15 @@ function ESPManager.update(Config, Utils, SkeletonRenderer)
 
         local boneColor = isOccluded and darkenColor(baseColor, Config.OCCLUDED_COLOR_FACTOR) or baseColor
 
-        if Config.SKELETON_ENABLED or Config.OFFSCREEN_ARROWS then
-            local drawObj = skeletonDrawings[char]
-            if not drawObj then
-                drawObj = SkeletonRenderer.create()
-                skeletonDrawings[char] = drawObj
-            end
-
-            SkeletonRenderer.render(drawObj, char, hp, maxHp, boneColor, baseColor, Config)
-        else
-            local drawObj = skeletonDrawings[char]
-            if drawObj then
-                SkeletonRenderer.hide(drawObj)
-            end
+        -- Always create/update drawObj when ESP is enabled, regardless of skeleton toggle
+        -- This ensures box, name, item, health bar work independently of skeleton
+        local drawObj = skeletonDrawings[char]
+        if not drawObj then
+            drawObj = SkeletonRenderer.create()
+            skeletonDrawings[char] = drawObj
         end
+
+        SkeletonRenderer.render(drawObj, char, hp, maxHp, boneColor, baseColor, Config)
     end
 
     for _, child in ipairs(charsFolder:GetChildren()) do

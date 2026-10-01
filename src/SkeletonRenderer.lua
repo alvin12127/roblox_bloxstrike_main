@@ -281,6 +281,21 @@ function SkeletonRenderer.render(drawObj, char, health, maxHealth, boneColor, ba
         return
     end
 
+    -- In third person mode, the camera is behind the player, so we need to
+    -- adjust the ESP position to account for the camera offset
+    local isThirdPerson = Config and Config.THIRDPERSON_ENABLED == true
+    local camera = Workspace.CurrentCamera
+    local cameraOffset = Vector3.new(0, 0, 0)
+    
+    if isThirdPerson and camera then
+        -- Get the camera's position relative to the character
+        local charRoot = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso")
+        if charRoot then
+            -- Calculate the offset from character to camera
+            cameraOffset = camera.CFrame.Position - charRoot.Position
+        end
+    end
+
     local minX, maxX, minY, maxY = computeCharacterBounds(char)
 
     if minX == nil then
@@ -291,7 +306,6 @@ function SkeletonRenderer.render(drawObj, char, health, maxHealth, boneColor, ba
     end
 
     local anyVisible = (maxX > -math.huge)
-    local skeletonEnabled = not Config or (Config.SKELETON_ENABLED ~= false)
     local skeletonEnabled = not Config or (Config.SKELETON_ENABLED ~= false)
     local viewAngleEnabled = not Config or (Config.VIEWANGLE_ENABLED ~= false)
 

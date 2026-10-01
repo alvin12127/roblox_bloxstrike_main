@@ -71,17 +71,57 @@ local function hideAll()
 end
 
 -- the bomb carrier is the only character with a BombHolster child
+-- Also check for "Bomb" attribute as fallback
 local function findBombCarrier()
     local characters = Workspace:FindFirstChild("Characters")
     if not characters then return nil end
 
     for _, character in ipairs(characters:GetChildren()) do
+        -- Check for BombHolster child (primary method)
         if character:FindFirstChild("BombHolster") then
             return character
+        end
+        
+        -- Check for Bomb attribute (fallback)
+        local hasBomb = false
+        pcall(function()
+            hasBomb = (character:GetAttribute("HasBomb") == true) or (character:GetAttribute("Bomb") == true)
+        end)
+        if hasBomb then
+            return character
+        end
+        
+        -- Check player attributes
+        local player = Players:FindFirstChild(character.Name)
+        if player then
+            local playerHasBomb = false
+            pcall(function()
+                playerHasBomb = (player:GetAttribute("HasBomb") == true) or (player:GetAttribute("Bomb") == true)
+            end)
+            if playerHasBomb then
+                return character
+            end
         end
     end
 
     return nil
+end
+
+-- find C4 folder in workspace
+local function findC4Folder()
+    local function scan(container)
+        if not container then return nil end
+        
+        for _, child in ipairs(container:GetChildren()) do
+            if child:IsA("Folder") and child.Name == "C4" then
+                return child
+            end
+        end
+        
+        return nil
+    end
+    
+    return scan(Workspace)
 end
 
 local function isBombName(name)
@@ -95,7 +135,19 @@ local function isBombName(name)
 end
 
 -- the physical bomb, anything outside the characters folder
+-- From dump: C4 folder exists in Workspace, and BombHolster is a Model parented to character
 local function findWorldBomb()
+    -- First check for C4 folder in workspace (from dump analysis)
+    local c4Folder = findC4Folder()
+    if c4Folder then
+        for _, child in ipairs(c4Folder:GetChildren()) do
+            if child:IsA("Model") then
+                return child
+            end
+        end
+    end
+
+    -- Fallback: scan workspace for bomb models
     local function scan(container)
         if not container then return nil end
 

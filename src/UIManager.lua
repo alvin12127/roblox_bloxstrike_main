@@ -13,14 +13,17 @@ local UIManager = {
 }
 
 function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback, HitSound)
-    if type(WeaponEngine) == "function" and unloadCallback == nil then
-        unloadCallback = WeaponEngine
-        WeaponEngine = nil
-    end
-
     if UIManager.Initialized then return end
     UIManager.Initialized = true
     UIManager.Library = Arvn
+    
+    -- Validate Arvn
+    if not Arvn or type(Arvn.CreateWindow) ~= "function" then
+        warn("[Bloxstrike] Arvn library not loaded properly")
+        UIManager.Initialized = false
+        UIManager.Library = nil
+        return
+    end
 
     -- auto save debounce
     local saveDebounce = nil
@@ -1327,9 +1330,9 @@ function UIManager.cleanup()
         end
     end)
 
-    local Arvn = UIManager.Library
-    if Arvn and Arvn.Unload then
-        pcall(function() Arvn:Unload() end)
+    -- Hide the menu instead of unloading the entire UI library
+    if Arvn and Arvn.Toggled then
+        pcall(Arvn.Toggle, Arvn)
     end
 
     UIManager.Library = nil
