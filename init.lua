@@ -174,6 +174,12 @@ local function cleanup()
     Chams.cleanup()
     InstantReload.cleanup()
 
+    -- Cleanup skinchanger
+    if SkinChanger and SkinChanger.API and SkinChanger.API.cleanup then
+        pcall(SkinChanger.API.cleanup)
+    end
+    SkinChanger = nil
+
     _G.__bloxstrikeJanitor = nil
     _G.__bloxstrikeConfig = nil
 end
@@ -186,31 +192,32 @@ reportInit("UIManager", function()
     UIManager.init(Config, Arvn, nil, WeaponEngine, cleanup, HitSound)
 end)
 
--- auto-launch skinchanger if enabled
-if Config.AUTO_LAUNCH_SKINCHANGER == true then
-    task.spawn(function()
-        if type(readfile) == "function" then
-            local localPaths = {
-                "roblox_bloxstrike_SC/init.lua",
-                "Bloxstrike-Skinchanger/init.lua"
-            }
-            for _, path in ipairs(localPaths) do
-                local okRead, content = pcall(readfile, path)
-                if okRead and content and #content > 0 then
-                    local fn = loadstring(content)
-                    if fn then
-                        local okExec = pcall(fn)
-                        if okExec then return end
-                    end
-                end
-            end
-        end
-
-        pcall(function()
-            loadstring(game:HttpGet("https://raw.githubusercontent.com/alvin12127/roblox_bloxstrike_SC/main/init.lua?t=" .. tostring(os.time())))()
-        end)
-    end)
-end
+-- Load skinchanger internally
+local SkinChanger = nil
+reportInit("SkinChanger", function()
+    local scConfig = import("Config")
+    local scDatabase = import("Database")
+    local scEngine = import("Engine")
+    local scAPI = import("API")
+    local scKnifeCatalog = import("KnifeCatalog")
+    local scGunCatalog = import("GunCatalog")
+    local scGloveCatalog = import("GloveCatalog")
+    local scUIManager = import("UIManager")
+    
+    scAPI.bind(scConfig, scDatabase, scEngine, scKnifeCatalog, scGunCatalog)
+    scAPI.bindGloveCatalog(scGloveCatalog)
+    scAPI.init()
+    
+    SkinChanger = {
+        API = scAPI,
+        UIManager = scUIManager,
+        Config = scConfig
+    }
+    
+    scUIManager.init(scConfig, Arvn, scAPI, scDatabase, scKnifeCatalog, scGunCatalog, scGloveCatalog)
+    
+    _G.SkinChanger = scAPI
+end)
 
 -- render loop
 renderConn = RunService.RenderStepped:Connect(function(dt)

@@ -1087,63 +1087,27 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
     local SkinsBox = SkinsTab:Section("Skin Changer")
 
     SkinsBox:Toggle({
-        Name = "Auto-launch on startup",
-        Default = (Config.AUTO_LAUNCH_SKINCHANGER == true),
-        Description = "Automatically executes the standalone Skinchanger from GitHub when Bloxstrike is initialized",
+        Name = "Show Skin Changer",
+        Default = false,
+        Description = "Toggle the skin changer window",
         Callback = function(on)
-            updateSetting("AUTO_LAUNCH_SKINCHANGER", on)
+            if SkinChanger and SkinChanger.UIManager then
+                if on then
+                    SkinChanger.UIManager.show()
+                else
+                    SkinChanger.UIManager.hide()
+                end
+            end
         end
     })
 
     SkinsBox:Button({
-        Name = "Launch Skinchanger UI",
+        Name = "Refresh Skins",
         Callback = function()
-            task.spawn(function()
-                -- 1. Try local workspace files first
-                if type(readfile) == "function" then
-                    local localPaths = {
-                        "roblox_bloxstrike_SC/init.lua",
-                        "Bloxstrike-Skinchanger/init.lua"
-                    }
-                    for _, path in ipairs(localPaths) do
-                        local okRead, content = pcall(readfile, path)
-                        if okRead and content and #content > 0 then
-                            local fn, loadErr = loadstring(content)
-                            if fn then
-                                local okExec, execErr = pcall(fn)
-                                if okExec then
-                                    Arvn:Notify({Title = "Skinchanger", Content = "Loaded locally!", Kind = "Success"})
-                                    return
-                                else
-                                    warn("[Bloxstrike] Local skinchanger execution error:", execErr)
-                                end
-                            end
-                        end
-                    end
-                end
-
-                -- 2. Remote GitHub with cache-busting timestamp
-                Arvn:Notify({Title = "Skinchanger", Content = "Fetching from GitHub..."})
-                local okHttp, content = pcall(function()
-                    return game:HttpGet("https://raw.githubusercontent.com/alvin12127/roblox_bloxstrike_SC/main/init.lua?t=" .. tostring(os.time()))
-                end)
-                if okHttp and content and #content > 0 then
-                    local fn, loadErr = loadstring(content)
-                    if fn then
-                        local okExec, execErr = pcall(fn)
-                        if okExec then
-                            Arvn:Notify({Title = "Skinchanger", Content = "Loaded successfully!", Kind = "Success"})
-                            return
-                        else
-                            warn("[Bloxstrike] Skinchanger execution error:", execErr)
-                            Arvn:Notify({Title = "Error", Content = tostring(execErr), Kind = "Error"})
-                            return
-                        end
-                    end
-                end
-
-                Arvn:Notify({Title = "Error", Content = "Failed to fetch skinchanger from GitHub", Kind = "Error"})
-            end)
+            if SkinChanger and SkinChanger.API and SkinChanger.API.refresh then
+                SkinChanger.API.refresh()
+                Arvn:Notify({Title = "Skinchanger", Content = "Refreshed!", Kind = "Success"})
+            end
         end
     })
 
