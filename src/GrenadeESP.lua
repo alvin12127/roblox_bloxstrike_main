@@ -21,10 +21,11 @@ local GrenadeESP = {
 
 local storedConfig = nil
 
--- straight from the dump
+-- straight from the dump. "grenadetrail" is the object that exists while a
+-- grenade is still in the air, the named parts only show up once it goes off.
 local GRENADE_NAMES = {
     "smoke grenade", "he grenade", "incendiary grenade", "decoy grenade",
-    "flashbang", "molotov"
+    "flashbang", "molotov", "grenadetrail", "grenade"
 }
 
 local C4_NAMES = { "c4" }
@@ -41,7 +42,10 @@ local SEARCH_ROOTS = {
 
 local SCAN_INTERVAL = 0.25
 local GRACE_MISSES = 2
-local PROXIMITY_THRESHOLD = 40
+-- Only meant to merge two markers of the *same* object, e.g. the grenade and the
+-- cloud it leaves behind. The dump shows the parked grenade parts sitting 1-35
+-- studs apart, so a large radius here silently ate Molotov and Decoy.
+local PROXIMITY_THRESHOLD = 5
 
 local PROFILE_GRENADE = "grenade"
 local PROFILE_C4 = "c4"

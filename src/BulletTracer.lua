@@ -112,16 +112,17 @@ function BulletTracer.push(hitData, Config)
 
     local endPoint = origin + (direction * distance)
 
-    -- the ray origin sits at the camera itself where the projected depth is 0,
-    -- which makes the start point degenerate. nudge it forward along the ray.
-    local startPoint = origin
+    -- A shot always leaves the crosshair, so the impact point projects to the
+    -- exact screen centre. Drawing camera -> impact would therefore be a zero
+    -- length line and never visible, so the tracer starts at the muzzle instead:
+    -- the view model gun sits down and to the right of the camera.
+    local cameraCFrame = camera.CFrame
+    local startPoint = cameraCFrame.Position
+        + (cameraCFrame.RightVector * 0.5)
+        + (cameraCFrame.UpVector * -0.34)
+        + (cameraCFrame.LookVector * 0.9)
+
     local okStart, startSp = pcall(camera.WorldToViewportPoint, camera, startPoint)
-
-    if (not okStart) or (not startSp) or (startSp.Z <= 0.05) then
-        startPoint = origin + (direction * 0.3)
-        okStart, startSp = pcall(camera.WorldToViewportPoint, camera, startPoint)
-    end
-
     local okTo, toSp = pcall(camera.WorldToViewportPoint, camera, endPoint)
 
     if (not okStart) or (not okTo) or (not startSp) or (not toSp) then
@@ -133,6 +134,13 @@ function BulletTracer.push(hitData, Config)
     if startSp.Z <= 0.01 or toSp.Z <= 0.01 then
         releaseLine(line)
         log(3, "projection behind camera")
+        return
+    end
+
+    -- a degenerate line draws nothing, which is what a camera origin produced
+    if (Vector2.new(startSp.X, startSp.Y) - Vector2.new(toSp.X, toSp.Y)).Magnitude < 3 then
+        releaseLine(line)
+        log(3, "degenerate: start and end coincide")
         return
     end
 
