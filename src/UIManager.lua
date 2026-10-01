@@ -354,6 +354,15 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
+    WeaponFire:AddToggle("InstantReload", {
+        Text = "Instant reload",
+        Default = (Config.INSTANT_RELOAD == true),
+        Tooltip = "Makes reload animations finish instantly",
+        Callback = function(Value)
+            updateSetting("INSTANT_RELOAD", Value)
+        end
+    })
+
     WeaponPen:AddToggle("Wallbang", {
         Text = "Infinite wallbang",
         Default = (Config.WALLBANG_ENABLED == true),
@@ -547,6 +556,143 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
+    -- chams panel
+    local ChamsBox = Tabs.Visuals:AddLeftGroupbox("Chams")
+
+    ChamsBox:AddToggle("ChamsEnabled", {
+        Text = "Enable chams",
+        Default = (Config.CHAMS_ENABLED == true),
+        Tooltip = "Colors enemy characters through walls",
+        Callback = function(Value)
+            updateSetting("CHAMS_ENABLED", Value)
+        end
+    })
+
+    ChamsBox:AddToggle("ChamsThroughWalls", {
+        Text = "Through walls",
+        Default = (Config.CHAMS_THROUGH_WALLS ~= false),
+        Tooltip = "Render chams through walls",
+        Callback = function(Value)
+            updateSetting("CHAMS_THROUGH_WALLS", Value)
+        end
+    })
+
+    ChamsBox:AddDropdown("ChamsMode", {
+        Values = { "Fill", "Outline", "Both" },
+        Default = Config.CHAMS_MODE or "Both",
+        Multi = false,
+        Text = "Mode",
+        Tooltip = "Fill: Only fill\nOutline: Only outline\nBoth: Fill and outline",
+        Callback = function(Value)
+            updateSetting("CHAMS_MODE", Value)
+        end
+    })
+
+    ChamsBox:AddDropdown("ChamsStyle", {
+        Values = { "Solid", "Pulse", "Rainbow", "Gradient", "Wireframe", "Distance" },
+        Default = Config.CHAMS_STYLE or "Solid",
+        Multi = false,
+        Text = "Style",
+        Tooltip = "Solid: Static color\nPulse: Pulsing transparency\nRainbow: Cycling hue\nGradient: Color blend\nWireframe: Outline only\nDistance: Distance-based color",
+        Callback = function(Value)
+            updateSetting("CHAMS_STYLE", Value)
+        end
+    })
+
+    ChamsBox:AddLabel("Primary color"):AddColorPicker("ChamsColor", {
+        Default = Config.CHAMS_COLOR or Color3.fromRGB(255, 60, 60),
+        Title = "Primary color",
+        Callback = function(Value)
+            updateSetting("CHAMS_COLOR", Value)
+        end
+    })
+
+    ChamsBox:AddLabel("Secondary color"):AddColorPicker("ChamsColorSecondary", {
+        Default = Config.CHAMS_COLOR_SECONDARY or Color3.fromRGB(60, 200, 255),
+        Title = "Secondary color",
+        Callback = function(Value)
+            updateSetting("CHAMS_COLOR_SECONDARY", Value)
+        end
+    })
+
+    ChamsBox:AddSlider("ChamsFillTransparency", {
+        Text = "Fill transparency",
+        Default = Config.CHAMS_FILL_TRANSPARENCY or 0.5,
+        Min = 0,
+        Max = 1,
+        Rounding = 2,
+        Compact = false,
+        Suffix = "",
+        Callback = function(Value)
+            updateSetting("CHAMS_FILL_TRANSPARENCY", Value)
+        end
+    })
+
+    ChamsBox:AddSlider("ChamsOutlineTransparency", {
+        Text = "Outline transparency",
+        Default = Config.CHAMS_OUTLINE_TRANSPARENCY or 0.8,
+        Min = 0,
+        Max = 1,
+        Rounding = 2,
+        Compact = false,
+        Suffix = "",
+        Callback = function(Value)
+            updateSetting("CHAMS_OUTLINE_TRANSPARENCY", Value)
+        end
+    })
+
+    ChamsBox:AddSlider("ChamsPulseSpeed", {
+        Text = "Pulse speed",
+        Default = Config.CHAMS_PULSE_SPEED or 3,
+        Min = 0.5,
+        Max = 10,
+        Rounding = 1,
+        Compact = false,
+        Suffix = "x",
+        Callback = function(Value)
+            updateSetting("CHAMS_PULSE_SPEED", Value)
+        end
+    })
+
+    ChamsBox:AddSlider("ChamsGradientSpeed", {
+        Text = "Gradient speed",
+        Default = Config.CHAMS_GRADIENT_SPEED or 2,
+        Min = 0.5,
+        Max = 10,
+        Rounding = 1,
+        Compact = false,
+        Suffix = "x",
+        Callback = function(Value)
+            updateSetting("CHAMS_GRADIENT_SPEED", Value)
+        end
+    })
+
+    ChamsBox:AddSlider("ChamsDistanceNear", {
+        Text = "Distance near",
+        Default = Config.CHAMS_DISTANCE_NEAR or 100,
+        Min = 10,
+        Max = 500,
+        Rounding = 0,
+        Compact = false,
+        Suffix = " s",
+        Callback = function(Value)
+            updateSetting("CHAMS_DISTANCE_NEAR", Value)
+        end
+    })
+
+    ChamsBox:AddSlider("ChamsDistanceFar", {
+        Text = "Distance far",
+        Default = Config.CHAMS_DISTANCE_FAR or 1500,
+        Min = 100,
+        Max = 3000,
+        Rounding = 0,
+        Compact = false,
+        Suffix = " s",
+        Callback = function(Value)
+            updateSetting("CHAMS_DISTANCE_FAR", Value)
+        end
+    })
+
     -- bullet tracer panel
     local TracerBox = Tabs.Visuals:AddRightGroupbox("Bullet Tracer")
 
@@ -606,6 +752,83 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
+    MoveMain:AddToggle("BhopAutoJump", {
+        Text = "Auto jump",
+        Default = (Config.BHOP_AUTO_JUMP ~= false),
+        Tooltip = "Automatically jumps when grounded",
+        Callback = function(Value)
+            updateSetting("BHOP_AUTO_JUMP", Value)
+        end
+    })
+
+    MoveMain:AddToggle("BhopAutoStrafe", {
+        Text = "Auto strafe",
+        Default = (Config.BHOP_AUTO_STRAFE ~= false),
+        Tooltip = "Automatically strafes in the air",
+        Callback = function(Value)
+            updateSetting("BHOP_AUTO_STRAFE", Value)
+        end
+    })
+
+    MoveMain:AddSlider("BhopStrafeForce", {
+        Text = "Strafe force",
+        Default = Config.BHOP_STRAFE_FORCE or 2,
+        Min = 0.5,
+        Max = 10,
+        Rounding = 1,
+        Compact = false,
+        Suffix = "x",
+        Callback = function(Value)
+            updateSetting("BHOP_STRAFE_FORCE", Value)
+        end
+    })
+
+    MoveMain:AddSlider("BhopMinSpeed", {
+        Text = "Min speed",
+        Default = Config.BHOP_MIN_SPEED or 10,
+        Min = 0,
+        Max = 50,
+        Rounding = 0,
+        Compact = false,
+        Suffix = " s/s",
+        Callback = function(Value)
+            updateSetting("BHOP_MIN_SPEED", Value)
+        end
+    })
+
+    MoveMain:AddDropdown("BhopMode", {
+        Values = { "Legit", "Rage" },
+        Default = Config.BHOP_MODE or "Legit",
+        Multi = false,
+        Text = "Mode",
+        Tooltip = "Legit: Wait for space input\nRage: Auto hop without input",
+        Callback = function(Value)
+            updateSetting("BHOP_MODE", Value)
+        end
+    })
+
+    MoveMain:AddToggle("BhopTeleportBoost", {
+        Text = "Teleport boost",
+        Default = (Config.BHOP_TELEPORT_BOOST == true),
+        Tooltip = "Boosts movement on jump",
+        Callback = function(Value)
+            updateSetting("BHOP_TELEPORT_BOOST", Value)
+        end
+    })
+
+    MoveMain:AddSlider("BhopTeleportDistance", {
+        Text = "Teleport distance",
+        Default = Config.BHOP_TELEPORT_DISTANCE or 0.5,
+        Min = 0.05,
+        Max = 1,
+        Rounding = 2,
+        Compact = false,
+        Suffix = " studs",
+        Callback = function(Value)
+            updateSetting("BHOP_TELEPORT_DISTANCE", Value)
+        end
+    })
+
     -- accuracy mods
     local WeaponAccuracy = Tabs.Weapons:AddLeftGroupbox("Recoil & Spread")
 
@@ -629,10 +852,13 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
-    -- camera and world
-    local WorldBox = Tabs.Movement:AddRightGroupbox("Camera & World")
+    -- world tab
+    local WorldTab = Window:AddTab("World")
 
-    WorldBox:AddToggle("CustomFov", {
+    -- camera section
+    local CameraBox = WorldTab:AddLeftGroupbox("Camera")
+
+    CameraBox:AddToggle("CustomFov", {
         Text = "Custom camera FOV",
         Default = (Config.CAMERA_FOV_ENABLED == true),
         Tooltip = "Overrides the camera field of view. The original value is restored when switched off.",
@@ -641,7 +867,7 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
-    WorldBox:AddSlider("CameraFovValue", {
+    CameraBox:AddSlider("CameraFovValue", {
         Text = "FOV",
         Default = Config.CAMERA_FOV_VALUE or 90,
         Min = 30,
@@ -651,6 +877,354 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         Suffix = "°",
         Callback = function(Value)
             updateSetting("CAMERA_FOV_VALUE", Value)
+        end
+    })
+
+    -- lighting section
+    local LightingBox = WorldTab:AddRightGroupbox("Lighting")
+
+    LightingBox:AddToggle("ClockTimeEnabled", {
+        Text = "Custom clock time",
+        Default = (Config.CLOCK_TIME_ENABLED == true),
+        Tooltip = "Sets the in-game time",
+        Callback = function(Value)
+            updateSetting("CLOCK_TIME_ENABLED", Value)
+        end
+    })
+
+    LightingBox:AddSlider("ClockTime", {
+        Text = "Time",
+        Default = Config.CLOCK_TIME or 14,
+        Min = 0,
+        Max = 24,
+        Rounding = 1,
+        Compact = false,
+        Suffix = "h",
+        Callback = function(Value)
+            updateSetting("CLOCK_TIME", Value)
+        end
+    })
+
+    LightingBox:AddToggle("BrightnessEnabled", {
+        Text = "Custom brightness",
+        Default = (Config.BRIGHTNESS_ENABLED == true),
+        Tooltip = "Overrides the game brightness",
+        Callback = function(Value)
+            updateSetting("BRIGHTNESS_ENABLED", Value)
+        end
+    })
+
+    LightingBox:AddSlider("Brightness", {
+        Text = "Brightness",
+        Default = Config.BRIGHTNESS or 2,
+        Min = 0,
+        Max = 10,
+        Rounding = 1,
+        Compact = false,
+        Suffix = "",
+        Callback = function(Value)
+            updateSetting("BRIGHTNESS", Value)
+        end
+    })
+
+    LightingBox:AddToggle("AmbientEnabled", {
+        Text = "Custom ambient",
+        Default = (Config.AMBIENT_ENABLED == true),
+        Tooltip = "Overrides the ambient color",
+        Callback = function(Value)
+            updateSetting("AMBIENT_ENABLED", Value)
+        end
+    })
+
+    LightingBox:AddLabel("Ambient color"):AddColorPicker("AmbientColor", {
+        Default = Config.AMBIENT_COLOR or Color3.fromRGB(100, 100, 100),
+        Title = "Ambient color",
+        Callback = function(Value)
+            updateSetting("AMBIENT_COLOR", Value)
+        end
+    })
+
+    LightingBox:AddToggle("OutdoorAmbientEnabled", {
+        Text = "Custom outdoor ambient",
+        Default = (Config.OUTDOOR_AMBIENT_ENABLED == true),
+        Tooltip = "Overrides the outdoor ambient color",
+        Callback = function(Value)
+            updateSetting("OUTDOOR_AMBIENT_ENABLED", Value)
+        end
+    })
+
+    LightingBox:AddLabel("Outdoor ambient color"):AddColorPicker("OutdoorAmbientColor", {
+        Default = Config.OUTDOOR_AMBIENT_COLOR or Color3.fromRGB(100, 100, 100),
+        Title = "Outdoor ambient color",
+        Callback = function(Value)
+            updateSetting("OUTDOOR_AMBIENT_COLOR", Value)
+        end
+    })
+
+    -- world modifiers section
+    local WorldModsBox = WorldTab:AddLeftGroupbox("World Mods")
+
+    WorldModsBox:AddToggle("Fullbright", {
+        Text = "Fullbright",
+        Default = (Config.FULLBRIGHT == true),
+        Tooltip = "Removes all shadows and makes everything bright",
+        Callback = function(Value)
+            updateSetting("FULLBRIGHT", Value)
+        end
+    })
+
+    WorldModsBox:AddToggle("NoFog", {
+        Text = "No fog",
+        Default = (Config.NO_FOG == true),
+        Tooltip = "Removes fog from the game",
+        Callback = function(Value)
+            updateSetting("NO_FOG", Value)
+        end
+    })
+
+    WorldModsBox:AddToggle("NoTextures", {
+        Text = "No textures",
+        Default = (Config.NO_TEXTURES == true),
+        Tooltip = "Removes textures from map parts",
+        Callback = function(Value)
+            updateSetting("NO_TEXTURES", Value)
+        end
+    })
+
+    WorldModsBox:AddToggle("RemoveGrass", {
+        Text = "Remove grass",
+        Default = (Config.REMOVE_GRASS == true),
+        Tooltip = "Removes grass decoration from terrain",
+        Callback = function(Value)
+            updateSetting("REMOVE_GRASS", Value)
+        end
+    })
+
+    WorldModsBox:AddToggle("SkyboxEnabled", {
+        Text = "Custom skybox",
+        Default = (Config.SKYBOX_ENABLED == true),
+        Tooltip = "Replaces the game skybox",
+        Callback = function(Value)
+            updateSetting("SKYBOX_ENABLED", Value)
+        end
+    })
+
+    WorldModsBox:AddInput("SkyboxId", {
+        Text = "Skybox asset ID",
+        Default = Config.SKYBOX_ID or "rbxassetid://159454299",
+        Numeric = false,
+        Finished = true,
+        Tooltip = "Roblox asset ID for the skybox",
+        Callback = function(Value)
+            updateSetting("SKYBOX_ID", Value)
+        end
+    })
+
+    -- map color section
+    local MapColorBox = WorldTab:AddRightGroupbox("Map Color")
+
+    MapColorBox:AddToggle("MapColorEnabled", {
+        Text = "Enable map color",
+        Default = (Config.MAP_COLOR_ENABLED == true),
+        Tooltip = "Tints the map with a custom color",
+        Callback = function(Value)
+            updateSetting("MAP_COLOR_ENABLED", Value)
+        end
+    })
+
+    MapColorBox:AddDropdown("MapColorMode", {
+        Values = { "Tint", "Ambient", "Both", "Saturation" },
+        Default = Config.MAP_COLOR_MODE or "Tint",
+        Multi = false,
+        Text = "Mode",
+        Tooltip = "Tint: Part colors\nAmbient: Lighting ambient\nBoth: Tint and ambient\nSaturation: Color correction saturation",
+        Callback = function(Value)
+            updateSetting("MAP_COLOR_MODE", Value)
+        end
+    })
+
+    MapColorBox:AddLabel("Map color"):AddColorPicker("MapColor", {
+        Default = Config.MAP_COLOR or Color3.fromRGB(255, 255, 255),
+        Title = "Map color",
+        Callback = function(Value)
+            updateSetting("MAP_COLOR", Value)
+        end
+    })
+
+    MapColorBox:AddSlider("MapSaturation", {
+        Text = "Saturation",
+        Default = Config.MAP_SATURATION or 0,
+        Min = -1,
+        Max = 1,
+        Rounding = 2,
+        Compact = false,
+        Suffix = "",
+        Callback = function(Value)
+            updateSetting("MAP_SATURATION", Value)
+        end
+    })
+
+    -- post processing section
+    local PostFxBox = WorldTab:AddLeftGroupbox("Post FX")
+
+    PostFxBox:AddToggle("BloomEnabled", {
+        Text = "Bloom",
+        Default = (Config.BLOOM_ENABLED == true),
+        Tooltip = "Adds a bloom effect to bright areas",
+        Callback = function(Value)
+            updateSetting("BLOOM_ENABLED", Value)
+        end
+    })
+
+    PostFxBox:AddSlider("BloomIntensity", {
+        Text = "Intensity",
+        Default = Config.BLOOM_INTENSITY or 1,
+        Min = 0,
+        Max = 5,
+        Rounding = 2,
+        Compact = false,
+        Suffix = "",
+        Callback = function(Value)
+            updateSetting("BLOOM_INTENSITY", Value)
+        end
+    })
+
+    PostFxBox:AddSlider("BloomSize", {
+        Text = "Size",
+        Default = Config.BLOOM_SIZE or 24,
+        Min = 0,
+        Max = 100,
+        Rounding = 0,
+        Compact = false,
+        Suffix = "",
+        Callback = function(Value)
+            updateSetting("BLOOM_SIZE", Value)
+        end
+    })
+
+    PostFxBox:AddSlider("BloomThreshold", {
+        Text = "Threshold",
+        Default = Config.BLOOM_THRESHOLD or 0.9,
+        Min = 0,
+        Max = 1,
+        Rounding = 2,
+        Compact = false,
+        Suffix = "",
+        Callback = function(Value)
+            updateSetting("BLOOM_THRESHOLD", Value)
+        end
+    })
+
+    PostFxBox:AddToggle("ColorCorrectionEnabled", {
+        Text = "Color correction",
+        Default = (Config.COLOR_CORRECTION_ENABLED == true),
+        Tooltip = "Adjusts brightness, contrast, saturation and tint",
+        Callback = function(Value)
+            updateSetting("COLOR_CORRECTION_ENABLED", Value)
+        end
+    })
+
+    PostFxBox:AddSlider("CCBrightness", {
+        Text = "Brightness",
+        Default = Config.CC_BRIGHTNESS or 0,
+        Min = -1,
+        Max = 1,
+        Rounding = 2,
+        Compact = false,
+        Suffix = "",
+        Callback = function(Value)
+            updateSetting("CC_BRIGHTNESS", Value)
+        end
+    })
+
+    PostFxBox:AddSlider("CCContrast", {
+        Text = "Contrast",
+        Default = Config.CC_CONTRAST or 0,
+        Min = -1,
+        Max = 1,
+        Rounding = 2,
+        Compact = false,
+        Suffix = "",
+        Callback = function(Value)
+            updateSetting("CC_CONTRAST", Value)
+        end
+    })
+
+    PostFxBox:AddSlider("CCSaturation", {
+        Text = "Saturation",
+        Default = Config.CC_SATURATION or 0,
+        Min = -1,
+        Max = 1,
+        Rounding = 2,
+        Compact = false,
+        Suffix = "",
+        Callback = function(Value)
+            updateSetting("CC_SATURATION", Value)
+        end
+    })
+
+    PostFxBox:AddLabel("Tint color"):AddColorPicker("CCTintColor", {
+        Default = Config.CC_TINT_COLOR or Color3.fromRGB(255, 255, 255),
+        Title = "Tint color",
+        Callback = function(Value)
+            updateSetting("CC_TINT_COLOR", Value)
+        end
+    })
+
+    PostFxBox:AddToggle("SunRaysEnabled", {
+        Text = "Sun rays",
+        Default = (Config.SUN_RAYS_ENABLED == true),
+        Tooltip = "Adds sun rays effect",
+        Callback = function(Value)
+            updateSetting("SUN_RAYS_ENABLED", Value)
+        end
+    })
+
+    PostFxBox:AddSlider("SunRaysIntensity", {
+        Text = "Intensity",
+        Default = Config.SUN_RAYS_INTENSITY or 0.25,
+        Min = 0,
+        Max = 2,
+        Rounding = 2,
+        Compact = false,
+        Suffix = "",
+        Callback = function(Value)
+            updateSetting("SUN_RAYS_INTENSITY", Value)
+        end
+    })
+
+    PostFxBox:AddSlider("SunRaysSpread", {
+        Text = "Spread",
+        Default = Config.SUN_RAYS_SPREAD or 1,
+        Min = 0,
+        Max = 2,
+        Rounding = 2,
+        Compact = false,
+        Suffix = "",
+        Callback = function(Value)
+            updateSetting("SUN_RAYS_SPREAD", Value)
+        end
+    })
+
+    PostFxBox:AddToggle("MotionBlurEnabled", {
+        Text = "Motion blur",
+        Default = (Config.MOTION_BLUR_ENABLED == true),
+        Tooltip = "Adds motion blur effect",
+        Callback = function(Value)
+            updateSetting("MOTION_BLUR_ENABLED", Value)
+        end
+    })
+
+    PostFxBox:AddSlider("MotionBlurStrength", {
+        Text = "Strength",
+        Default = Config.MOTION_BLUR_STRENGTH or 1,
+        Min = 0,
+        Max = 10,
+        Rounding = 1,
+        Compact = false,
+        Suffix = "",
+        Callback = function(Value)
+            updateSetting("MOTION_BLUR_STRENGTH", Value)
         end
     })
     -- skins tab
@@ -755,6 +1329,56 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
+    AimControl:AddDropdown("AntiAimYawBase", {
+        Values = { "Off", "Spin", "Jitter", "Random" },
+        Default = Config.ANTIAIM_YAW_BASE or "Off",
+        Multi = false,
+        Text = "Yaw base",
+        Tooltip = "Off: No yaw modification\nSpin: Continuous rotation\nJitter: Random jitter\nRandom: Random yaw",
+        Callback = function(Value)
+            updateSetting("ANTIAIM_YAW_BASE", Value)
+        end
+    })
+
+    AimControl:AddSlider("AntiAimYawOffset", {
+        Text = "Yaw offset",
+        Default = Config.ANTIAIM_YAW_OFFSET or 0,
+        Min = -180,
+        Max = 180,
+        Rounding = 0,
+        Compact = false,
+        Suffix = "°",
+        Callback = function(Value)
+            updateSetting("ANTIAIM_YAW_OFFSET", Value)
+        end
+    })
+
+    AimControl:AddSlider("AntiAimSpinSpeed", {
+        Text = "Spin speed",
+        Default = Config.ANTIAIM_SPIN_SPEED or 360,
+        Min = 30,
+        Max = 720,
+        Rounding = 0,
+        Compact = false,
+        Suffix = "°/s",
+        Callback = function(Value)
+            updateSetting("ANTIAIM_SPIN_SPEED", Value)
+        end
+    })
+
+    AimControl:AddSlider("AntiAimJitterOffset", {
+        Text = "Jitter offset",
+        Default = Config.ANTIAIM_JITTER_OFFSET or 30,
+        Min = 5,
+        Max = 90,
+        Rounding = 0,
+        Compact = false,
+        Suffix = "°",
+        Callback = function(Value)
+            updateSetting("ANTIAIM_JITTER_OFFSET", Value)
+        end
+    })
+
     AimControl:AddSlider("AntiAimPitch", {
         Text = "Pitch",
         Default = Config.ANTIAIM_PITCH or 60,
@@ -768,9 +1392,9 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
-    local CameraBox = Tabs.Movement:AddRightGroupbox("Third Person")
+    local ThirdPersonBox = WorldTab:AddRightGroupbox("Third Person")
 
-    CameraBox:AddToggle("ThirdPersonToggle", {
+    ThirdPersonBox:AddToggle("ThirdPersonToggle", {
         Text = "Third person",
         Default = (Config.THIRDPERSON_ENABLED == true),
         Tooltip = "Pulls the camera back behind the rig. Mouse look is unaffected.",
@@ -779,7 +1403,7 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
-    CameraBox:AddSlider("ThirdPersonDistance", {
+    ThirdPersonBox:AddSlider("ThirdPersonDistance", {
         Text = "Distance",
         Default = Config.THIRDPERSON_DISTANCE or 9,
         Min = 4,
@@ -792,7 +1416,7 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
-    CameraBox:AddSlider("ThirdPersonHeight", {
+    ThirdPersonBox:AddSlider("ThirdPersonHeight", {
         Text = "Height offset",
         Default = Config.THIRDPERSON_HEIGHT or 0,
         Min = -6,
@@ -805,7 +1429,7 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
-    CameraBox:AddToggle("ThirdPersonGuard", {
+    ThirdPersonBox:AddToggle("ThirdPersonGuard", {
         Text = "Camera lock guard",
         Default = (Config.THIRDPERSON_GUARD ~= false),
         Tooltip = "Stops the game forcing first person back. Turn off if it ever interferes with another script.",
