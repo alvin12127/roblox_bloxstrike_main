@@ -33,12 +33,70 @@ local function cloneTable(t)
     return copy
 end
 
+-- known recoil / spread field names used by the weapon database.
+-- The whole config is cloned into _originalConfigs on init, so anything zeroed
+-- here is restored byte for byte by cleanup().
+local RECOIL_KEYS = {
+    recoil = true, recoilamount = true, verticalrecoil = true, horizontalrecoil = true,
+    recoilvertical = true, recoilhorizontal = true, recoilrecovery = true, recoilseed = true,
+    viewkick = true, viewkickamount = true, aimpunch = true, punch = true, kick = true,
+    kickamount = true, camerarecoil = true, recoilpitch = true, recoilyaw = true
+}
+
+local SPREAD_KEYS = {
+    spread = true, spreadmin = true, spreadmax = true, basespread = true,
+    maxspread = true, minspread = true, spreadrecovery = true, spreadpershot = true,
+    bloom = true, bloompershot = true, spreadincrease = true, spreaddecrease = true,
+    spreadfactor = true, accuracy = true, inaccuracy = true
+}
+
+local function zeroAllNumbers(tbl)
+    if type(tbl) ~= 'table' then return end
+    if isreadonly(tbl) then setreadonly(tbl, false) end
+
+    for key, value in pairs(tbl) do
+        if type(value) == 'number' then
+            tbl[key] = 0
+        elseif type(value) == 'table' then
+            zeroAllNumbers(value)
+        end
+    end
+end
+
+local function patchRecoilSpread(tbl, Config, depth)
+    depth = depth or 0
+    if type(tbl) ~= 'table' or depth > 4 then return end
+    if isreadonly(tbl) then setreadonly(tbl, false) end
+
+    local removeRecoil = Config.NO_RECOIL == true
+    local removeSpread = Config.NO_SPREAD == true
+    if (not removeRecoil) and (not removeSpread) then return end
+
+    for key, value in pairs(tbl) do
+        local lower = tostring(key):lower()
+        local matched = (removeRecoil and RECOIL_KEYS[lower]) or (removeSpread and SPREAD_KEYS[lower])
+
+        if matched then
+            if type(value) == 'number' then
+                tbl[key] = 0
+            elseif type(value) == 'table' then
+                zeroAllNumbers(value)
+            end
+        elseif type(value) == 'table' then
+            patchRecoilSpread(value, Config, depth + 1)
+        end
+    end
+end
+
 -- patch database configs
 local function patchDatabaseConfig(cfg, name, Config)
     if not cfg or type(cfg) ~= 'table' then return end
     if isreadonly(cfg) then setreadonly(cfg, false) end
 
     local orig = WeaponEngine._originalConfigs[name] or {}
+
+    -- recoil and spread removal
+    patchRecoilSpread(cfg, Config)
 
     -- custom rpm
     if Config.CUSTOM_RPM_ENABLED and Config.CUSTOM_RPM_VALUE and Config.CUSTOM_RPM_VALUE > 0 then
@@ -99,7 +157,14 @@ local function patchLiveItem(item, Config)
     if props and type(props) == 'table' then
         if isreadonly(props) then setreadonly(props, false) end
 
+        -- keep a backup before mutating so cleanup can restore it
+        if not WeaponEngine._originalConfigs[item.Name] then
+            WeaponEngine._originalConfigs[item.Name] = cloneTable(props)
+        end
+
         local orig = WeaponEngine._originalConfigs[item.Name] or {}
+
+        patchRecoilSpread(props, Config)
 
         if Config.CUSTOM_RPM_ENABLED and Config.CUSTOM_RPM_VALUE and Config.CUSTOM_RPM_VALUE > 0 then
             props.FireRate = 60 / Config.CUSTOM_RPM_VALUE

@@ -166,6 +166,13 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         Library:Notify("Hit sound source not found - check file location or asset ID", 4)
     end
 
+    -- Notifications build instances, which some threads are not allowed to do,
+    -- so every toast goes through this guard instead of failing the caller.
+    local function safeNotify(text, duration)
+        if not Library or type(Library.Notify) ~= "function" then return end
+        pcall(Library.Notify, Library, tostring(text), duration or 2)
+    end
+
     -- hit sound
     local AimHitSound = Tabs.Aim:AddRightGroupbox("Hit Sound")
 
@@ -508,6 +515,53 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
+    -- bullet tracer panel
+    local TracerBox = Tabs.Visuals:AddRightGroupbox("Bullet Tracer")
+
+    TracerBox:AddToggle("BulletTracer", {
+        Text = "Enable tracers",
+        Default = (Config.BULLET_TRACER_ENABLED == true),
+        Tooltip = "Draws the flight path of every bullet you fire",
+        Callback = function(Value)
+            updateSetting("BULLET_TRACER_ENABLED", Value)
+        end
+    })
+
+    TracerBox:AddLabel("Tracer color"):AddColorPicker("TracerColor", {
+        Default = Config.BULLET_TRACER_COLOR or Color3.fromRGB(186, 140, 255),
+        Title = "Tracer color",
+        Callback = function(Value)
+            updateSetting("BULLET_TRACER_COLOR", Value)
+        end
+    })
+
+    TracerBox:AddSlider("TracerThickness", {
+        Text = "Line thickness",
+        Default = Config.BULLET_TRACER_THICKNESS or 1.5,
+        Min = 0.1,
+        Max = 6,
+        Rounding = 1,
+        Compact = false,
+        Suffix = " px",
+        Callback = function(Value)
+            updateSetting("BULLET_TRACER_THICKNESS", Value)
+        end
+    })
+
+    TracerBox:AddSlider("TracerDuration", {
+        Text = "Fade time",
+        Default = (Config.BULLET_TRACER_DURATION or 0.6) * 10,
+        Min = 1,
+        Max = 30,
+        Rounding = 0,
+        Compact = false,
+        Suffix = " (x0.1s)",
+        Tooltip = "How long the tracer stays on screen before it fades out",
+        Callback = function(Value)
+            updateSetting("BULLET_TRACER_DURATION", Value / 10)
+        end
+    })
+
     -- movement tab
     local MoveMain = Tabs.Movement:AddLeftGroupbox("Movement Physics")
 
@@ -517,6 +571,29 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         Tooltip = "Automatic jump execution via native MovementV2 physics",
         Callback = function(Value)
             updateSetting("BHOP_ENABLED", Value)
+        end
+    })
+
+    -- accuracy mods
+    local WeaponAccuracy = Tabs.Weapons:AddLeftGroupbox("Recoil & Spread")
+
+    WeaponAccuracy:AddToggle("NoRecoil", {
+        Text = "No recoil",
+        Default = (Config.NO_RECOIL == true),
+        Tooltip = "Zeroes every recoil field in the weapon database. Original values are restored on unload.",
+        Callback = function(Value)
+            updateSetting("NO_RECOIL", Value)
+            if WeaponEngine and WeaponEngine.sync then WeaponEngine.sync(Config) end
+        end
+    })
+
+    WeaponAccuracy:AddToggle("NoSpread", {
+        Text = "No spread",
+        Default = (Config.NO_SPREAD == true),
+        Tooltip = "Removes bullet deviation, both in the weapon database and per shot.",
+        Callback = function(Value)
+            updateSetting("NO_SPREAD", Value)
+            if WeaponEngine and WeaponEngine.sync then WeaponEngine.sync(Config) end
         end
     })
 
@@ -548,7 +625,7 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
                             if fn then
                                 local okExec, execErr = pcall(fn)
                                 if okExec then
-                                    Library:Notify("Skinchanger loaded (local)!", 2)
+                                    safeNotify("Skinchanger loaded (local)!", 2)
                                     return
                                 else
                                     warn("[Bloxstrike] Local skinchanger execution error:", execErr)
@@ -559,7 +636,7 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
                 end
 
                 -- 2. Remote GitHub with cache-busting timestamp
-                Library:Notify("Fetching Skinchanger from GitHub...", 2)
+                safeNotify("Fetching Skinchanger from GitHub...", 2)
                 local okHttp, content = pcall(function()
                     return game:HttpGet("https://raw.githubusercontent.com/alvin12127/roblox_bloxstrike_SC/main/init.lua?t=" .. tostring(os.time()))
                 end)
@@ -568,7 +645,7 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
                     if fn then
                         local okExec, execErr = pcall(fn)
                         if okExec then
-                            Library:Notify("Skinchanger loaded successfully!", 2)
+                            safeNotify("Skinchanger loaded successfully!", 2)
                             return
                         else
                             warn("[Bloxstrike] Skinchanger execution error:", execErr)
@@ -688,6 +765,8 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
             if Toggles.CustomRpm then Toggles.CustomRpm:SetValue(Config.CUSTOM_RPM_ENABLED) end
             if Options.RpmSlider then Options.RpmSlider:SetValue(Config.CUSTOM_RPM_VALUE or 1491) end
             if Toggles.ForceFullAuto then Toggles.ForceFullAuto:SetValue(Config.FORCE_FULL_AUTO) end
+            if Toggles.NoRecoil then Toggles.NoRecoil:SetValue(Config.NO_RECOIL) end
+            if Toggles.NoSpread then Toggles.NoSpread:SetValue(Config.NO_SPREAD) end
             if Toggles.Wallbang then Toggles.Wallbang:SetValue(Config.WALLBANG_ENABLED) end
 
             if Toggles.EspMaster then Toggles.EspMaster:SetValue(Config.ESP_ENABLED) end
@@ -706,6 +785,13 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
             if Options.FovOpacity then Options.FovOpacity:SetValue(math.floor((Config.FOV_CIRCLE_TRANSPARENCY or 0.5) * 100)) end
             if Toggles.AntiFlash then Toggles.AntiFlash:SetValue(Config.ANTI_FLASH_ENABLED) end
             if Options.FlashOpacity then Options.FlashOpacity:SetValue(math.floor((Config.ANTI_FLASH_TRANSPARENCY or 0.85) * 100)) end
+
+            if Toggles.BulletTracer then Toggles.BulletTracer:SetValue(Config.BULLET_TRACER_ENABLED) end
+            if Options.TracerColor and Options.TracerColor.SetValueRGB then
+                Options.TracerColor:SetValueRGB(Config.BULLET_TRACER_COLOR or Color3.fromRGB(186, 140, 255))
+            end
+            if Options.TracerThickness then Options.TracerThickness:SetValue(Config.BULLET_TRACER_THICKNESS or 1.5) end
+            if Options.TracerDuration then Options.TracerDuration:SetValue((Config.BULLET_TRACER_DURATION or 0.6) * 10) end
 
             if Toggles.Bhop then Toggles.Bhop:SetValue(Config.BHOP_ENABLED) end
             if Toggles.KnifeChanger then Toggles.KnifeChanger:SetValue(Config.KNIFE_SKINS_ENABLED ~= false) end

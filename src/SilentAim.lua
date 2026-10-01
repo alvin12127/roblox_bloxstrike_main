@@ -145,7 +145,7 @@ local function resolveEnemyCharacter(instance, Utils)
     return model
 end
 
-function SilentAim.init(Config, Utils, HitSound)
+function SilentAim.init(Config, Utils, HitSound, BulletTracer)
     local notifyHit = function(result)
         if not HitSound then return end
         if Config.HITSOUND_ENABLED ~= true then return end
@@ -157,6 +157,14 @@ function SilentAim.init(Config, Utils, HitSound)
         local okChar, char = pcall(resolveEnemyCharacter, hitPart, Utils)
         if okChar and char then
             HitSound.play(char)
+        end
+    end
+
+    local finishShot = function(result)
+        notifyHit(result)
+
+        if BulletTracer and BulletTracer.push then
+            pcall(BulletTracer.push, result, Config)
         end
     end
 
@@ -235,21 +243,24 @@ function SilentAim.init(Config, Utils, HitSound)
                     end)
 
                     if success and result and result.Hits then
-                        notifyHit(result)
+                        finishShot(result)
                         return result
                     end
                 end
             end
         end
 
+        -- no spread: the deviation value is what the native raycast uses
+        local effectiveSpread = (Config.NO_SPREAD == true) and 0 or spread
+
         local fallbackResult
         if _G.__originalPerformRaycast and _G.__originalPerformRaycast ~= silentAimPerformRaycast then
-            fallbackResult = _G.__originalPerformRaycast(self, spread)
+            fallbackResult = _G.__originalPerformRaycast(self, effectiveSpread)
         else
-            fallbackResult = nativeRaycastWithSpread(self, spread)
+            fallbackResult = nativeRaycastWithSpread(self, effectiveSpread)
         end
 
-        notifyHit(fallbackResult)
+        finishShot(fallbackResult)
 
         return fallbackResult
     end

@@ -282,15 +282,19 @@ function HitSound.setVolume(level)
 end
 
 -- (re)builds the rotating sound pool, returns ok + status message
+-- builds the pool without ever leaving it empty: the new instances are created
+-- first and the old ones are only discarded once we know creation succeeded.
+-- Some threads (for example task.spawn) cannot call Instance.new at all, and in
+-- that case we keep whatever pool is already alive instead of losing the sound.
 function HitSound.build(Config)
-    HitSound.destroyPool()
-
     local asset = HitSound.resolveAsset(Config)
     HitSound.CurrentAsset = asset
 
     if not asset then
         return false, "No usable audio source"
     end
+
+    local created = {}
 
     for i = 1, HitSound.PoolSize do
         local ok, sound = pcall(function()
@@ -303,13 +307,16 @@ function HitSound.build(Config)
             return s
         end)
         if ok and sound then
-            table.insert(HitSound.Sounds, sound)
+            table.insert(created, sound)
         end
     end
 
-    if #HitSound.Sounds == 0 then
+    if #created == 0 then
         return false, "Failed to create sound instances"
     end
+
+    HitSound.destroyPool()
+    HitSound.Sounds = created
 
     pcall(function() ContentProvider:PreloadAsync(HitSound.Sounds) end)
 

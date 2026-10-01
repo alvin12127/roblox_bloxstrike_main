@@ -61,9 +61,17 @@ local Config = {
     ANTI_FLASH_TRANSPARENCY = 0.27,
 
     -- weapons
+    NO_RECOIL = false,
+    NO_SPREAD = false,
     CUSTOM_RPM_ENABLED = false,
     CUSTOM_RPM_VALUE = 1018,
     FORCE_FULL_AUTO = false,
+
+    -- bullet tracer
+    BULLET_TRACER_ENABLED = false,
+    BULLET_TRACER_COLOR = Color3.fromRGB(186, 140, 255),
+    BULLET_TRACER_THICKNESS = 1.5,
+    BULLET_TRACER_DURATION = 0.6,
 
     -- skins
     AUTO_LAUNCH_SKINCHANGER = false,
@@ -154,9 +162,14 @@ local DEFAULT_VALUES = {
     BHOP_ENABLED = true,
     ANTI_FLASH_ENABLED = true,
     ANTI_FLASH_TRANSPARENCY = 0.27,
+    NO_RECOIL = false,
+    NO_SPREAD = false,
     CUSTOM_RPM_ENABLED = false,
     CUSTOM_RPM_VALUE = 1018,
     FORCE_FULL_AUTO = false,
+    BULLET_TRACER_ENABLED = false,
+    BULLET_TRACER_THICKNESS = 1.5,
+    BULLET_TRACER_DURATION = 0.6,
     AUTO_LAUNCH_SKINCHANGER = false,
     SKINS_ENABLED = true,
     KNIFE_SKINS_ENABLED = true,
@@ -363,9 +376,14 @@ function Config.save()
         ANTI_FLASH_ENABLED = Config.ANTI_FLASH_ENABLED,
         ANTI_FLASH_TRANSPARENCY = Config.ANTI_FLASH_TRANSPARENCY,
 
+        NO_RECOIL = (Config.NO_RECOIL == true),
+        NO_SPREAD = (Config.NO_SPREAD == true),
         CUSTOM_RPM_ENABLED = Config.CUSTOM_RPM_ENABLED,
         CUSTOM_RPM_VALUE = Config.CUSTOM_RPM_VALUE,
         FORCE_FULL_AUTO = Config.FORCE_FULL_AUTO,
+        BULLET_TRACER_ENABLED = (Config.BULLET_TRACER_ENABLED == true),
+        BULLET_TRACER_THICKNESS = Config.BULLET_TRACER_THICKNESS or 1.5,
+        BULLET_TRACER_DURATION = Config.BULLET_TRACER_DURATION or 0.6,
         AUTO_LAUNCH_SKINCHANGER = (Config.AUTO_LAUNCH_SKINCHANGER == true),
 
         SKINS_ENABLED = Config.SKINS_ENABLED,
