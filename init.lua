@@ -91,6 +91,8 @@ local C4ESP           = import("C4ESP")
 local SpinBot          = import("SpinBot")
 local ThirdPerson      = import("ThirdPerson")
 local WorldMods        = import("WorldMods")
+local Chams            = import("Chams")
+local InstantReload    = import("InstantReload")
 local LinoriaLib      = import("LinoriaLib")
 local UIManager        = import("UIManager")
 
@@ -138,6 +140,8 @@ reportInit("Wallbang", function() Wallbang.init(Config) end)
 reportInit("Bhop", function() Bhop.init(Config) end)
 reportInit("AntiFlash", function() AntiFlash.init(Config) end)
 reportInit("WeaponEngine", function() WeaponEngine.init(Config) end)
+reportInit("Chams", function() Chams.init(Config, Utils) end)
+reportInit("InstantReload", function() InstantReload.init(Config) end)
 
 -- cleanup
 local renderConn = nil
@@ -164,7 +168,10 @@ local function cleanup()
     SpectateChecker.cleanup()
     
     pcall(function() fovCircle:Remove() end)
-    
+
+    Chams.cleanup()
+    InstantReload.cleanup()
+
     _G.__bloxstrikeJanitor = nil
     _G.__bloxstrikeConfig = nil
 end
