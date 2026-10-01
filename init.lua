@@ -93,7 +93,6 @@ local ThirdPerson      = import("ThirdPerson")
 local WorldMods        = import("WorldMods")
 local Chams            = import("Chams")
 local InstantReload    = import("InstantReload")
-local LinoriaLib      = import("LinoriaLib")
 local UIManager        = import("UIManager")
 
 -- Load arvn UI library
@@ -241,7 +240,7 @@ end)
 -- unload key listener
 keyConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if UserInputService:GetFocusedTextBox() then return end
-    if LinoriaLib and LinoriaLib.IsPickingKey then return end
+    if Arvn and Arvn.IsPickingKey then return end
     if Config.UNLOAD_KEY and input.KeyCode == Config.UNLOAD_KEY then
         cleanup()
     end
