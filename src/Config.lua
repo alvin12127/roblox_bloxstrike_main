@@ -67,6 +67,7 @@ local Config = {
     THIRDPERSON_ENABLED = false,
     THIRDPERSON_DISTANCE = 9,
     THIRDPERSON_HEIGHT = 0,
+    THIRDPERSON_GUARD = true,
 
     -- world
     CAMERA_FOV_ENABLED = false,
@@ -220,6 +221,7 @@ local DEFAULT_VALUES = {
     THIRDPERSON_ENABLED = false,
     THIRDPERSON_DISTANCE = 9,
     THIRDPERSON_HEIGHT = 0,
+    THIRDPERSON_GUARD = true,
 
     -- world
     CAMERA_FOV_ENABLED = false,
@@ -426,6 +428,7 @@ function Config.save()
         THIRDPERSON_ENABLED = (Config.THIRDPERSON_ENABLED == true),
         THIRDPERSON_DISTANCE = Config.THIRDPERSON_DISTANCE or 9,
         THIRDPERSON_HEIGHT = Config.THIRDPERSON_HEIGHT or 0,
+        THIRDPERSON_GUARD = (Config.THIRDPERSON_GUARD ~= false),
         CAMERA_FOV_ENABLED = (Config.CAMERA_FOV_ENABLED == true),
         CAMERA_FOV_VALUE = Config.CAMERA_FOV_VALUE or 90,
         BULLET_TRACER_ENABLED = (Config.BULLET_TRACER_ENABLED == true),

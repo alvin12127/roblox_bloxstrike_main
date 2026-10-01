@@ -1,17 +1,25 @@
 -- third person camera
--- Ported as-is from the reference source. Two pieces work together:
+-- Ported from the reference source, with one important change: the __newindex
+-- metamethod guard is installed ONLY while the feature is enabled.
 --
---   1) a __newindex hook on the game metatable. Roblox routes every property
---      write on every Instance through this metamethod, so the game can be
---      silently prevented from pushing CameraMode back to LockFirstPerson (and
---      from resetting the zoom limits) whenever it sets up the view.
+-- Replacing mt.__newindex intercepts the property write of every Instance in the
+-- game. Roblox's original __newindex performs a capability check on the calling
+-- thread, and any script running on a thread without the Plugin capability then
+-- fails with
+--     "The current thread cannot access 'Instance' (lacking capability Plugin)"
+-- which is exactly what happened to the loader when it updated its status label
+-- from a task.spawn thread. With the feature off the metatable is left untouched,
+-- so nothing else in the game is affected.
 --
---   2) a per frame write of CameraMode = Classic plus CameraMin/MaxZoomDistance
---      pinned to the same number. Equal min and max is what locks the camera at
---      exactly that distance behind the character.
+-- How it works:
+--   1) while enabled, the guard rewrites CameraMode to Classic and pins both
+--      zoom limits to the same distance, so the game cannot push the view back
+--      into first person between our own writes.
+--   2) a per frame write of the same three properties does the actual work.
+--      Equal min and max zoom is what locks the camera at exactly that distance
+--      behind the character.
 --
--- Nothing here touches Camera.CFrame or the character rig, which is why the
--- character no longer gets dragged along with the view.
+-- Nothing here touches Camera.CFrame or the character rig.
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
@@ -28,7 +36,20 @@ local metaHooked = false
 local originalNewIndex = nil
 local forcedFirstPerson = false
 
--- installs the metamethod guard once
+local function isEnabled()
+    return storedConfig and storedConfig.THIRDPERSON_ENABLED == true
+end
+
+-- the metamethod guard is what keeps the game from forcing first person back.
+-- It can be turned off if it ever interferes with another script.
+local function guardAllowed()
+    return storedConfig and storedConfig.THIRDPERSON_GUARD ~= false
+end
+
+local function currentDistance()
+    return math.clamp(tonumber(storedConfig and storedConfig.THIRDPERSON_DISTANCE) or 10, 5, 50)
+end
+
 local function installMetaHook()
     if metaHooked then return end
     if not (getrawmetatable and setreadonly and newcclosure) then return end
@@ -42,25 +63,31 @@ local function installMetaHook()
     originalNewIndex = oldNewIndex
     metaHooked = true
 
-    setreadonly(mt, false)
+    pcall(function()
+        setreadonly(mt, false)
 
-    mt.__newindex = newcclosure(function(self, key, value)
-        if self == LocalPlayer and storedConfig and storedConfig.THIRDPERSON_ENABLED then
-            local dist = math.clamp(storedConfig.THIRDPERSON_DISTANCE or 10, 5, 50)
-
-            if key == "CameraMode" then
-                return oldNewIndex(self, key, Enum.CameraMode.Classic)
-            elseif key == "CameraMaxZoomDistance" then
-                return oldNewIndex(self, key, dist)
-            elseif key == "CameraMinZoomDistance" then
-                return oldNewIndex(self, key, dist)
+        mt.__newindex = newcclosure(function(self, key, value)
+            -- Only the local player's camera properties are ever rewritten
+            if self == LocalPlayer and isEnabled() then
+                if key == "CameraMode" then
+                    value = Enum.CameraMode.Classic
+                elseif key == "CameraMaxZoomDistance" or key == "CameraMinZoomDistance" then
+                    value = currentDistance()
+                end
             end
-        end
 
-        return oldNewIndex(self, key, value)
+            -- The original metamethod checks the caller's capabilities, so this
+            -- can legitimately fail on a restricted thread. Swallowing it keeps
+            -- a third person write from ever breaking an unrelated script.
+            local okWrite, result = pcall(oldNewIndex, self, key, value)
+            if okWrite then
+                return result
+            end
+            return nil
+        end)
+
+        setreadonly(mt, true)
     end)
-
-    setreadonly(mt, true)
 end
 
 local function restoreMetaHook()
@@ -85,14 +112,14 @@ function ThirdPerson.init(Config)
 
     storedConfig = Config
 
-    -- same as the reference: install the guard off the main path
-    task.spawn(function()
-        pcall(installMetaHook)
-    end)
-
     ThirdPerson.Connection = RunService.RenderStepped:Connect(function()
         pcall(function()
-            if (not storedConfig) or (not storedConfig.THIRDPERSON_ENABLED) then
+            if not isEnabled() then
+                -- the guard is only needed while the feature is on
+                if metaHooked then
+                    restoreMetaHook()
+                end
+
                 -- same as the reference toggle callback: drop back to first
                 -- person once, instead of writing it every frame
                 if not forcedFirstPerson then
@@ -104,11 +131,19 @@ function ThirdPerson.init(Config)
 
             forcedFirstPerson = false
 
-            local clampedDist = math.clamp(storedConfig.THIRDPERSON_DISTANCE or 10, 5, 50)
+            if not guardAllowed() then
+                if metaHooked then
+                    restoreMetaHook()
+                end
+            elseif not metaHooked then
+                installMetaHook()
+            end
+
+            local dist = currentDistance()
 
             LocalPlayer.CameraMode = Enum.CameraMode.Classic
-            LocalPlayer.CameraMaxZoomDistance = clampedDist
-            LocalPlayer.CameraMinZoomDistance = clampedDist
+            LocalPlayer.CameraMaxZoomDistance = dist
+            LocalPlayer.CameraMinZoomDistance = dist
         end)
     end)
 end

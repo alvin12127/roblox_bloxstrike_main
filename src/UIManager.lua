@@ -809,6 +809,15 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
+    CameraBox:AddToggle("ThirdPersonGuard", {
+        Text = "Camera lock guard",
+        Default = (Config.THIRDPERSON_GUARD ~= false),
+        Tooltip = "Stops the game forcing first person back. Turn off if it ever interferes with another script.",
+        Callback = function(Value)
+            updateSetting("THIRDPERSON_GUARD", Value)
+        end
+    })
+
     -- settings tab
     local MenuGroup = Tabs.Settings:AddLeftGroupbox("Keybinds")
     local ActionsGroup = Tabs.Settings:AddRightGroupbox("Actions")
@@ -951,6 +960,7 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
             if Toggles.ThirdPersonToggle then Toggles.ThirdPersonToggle:SetValue(Config.THIRDPERSON_ENABLED) end
             if Options.ThirdPersonDistance then Options.ThirdPersonDistance:SetValue(Config.THIRDPERSON_DISTANCE or 9) end
             if Options.ThirdPersonHeight then Options.ThirdPersonHeight:SetValue(Config.THIRDPERSON_HEIGHT or 0) end
+    if Toggles.ThirdPersonGuard then Toggles.ThirdPersonGuard:SetValue(Config.THIRDPERSON_GUARD ~= false) end
             if Toggles.KnifeChanger then Toggles.KnifeChanger:SetValue(Config.KNIFE_SKINS_ENABLED ~= false) end
             if Toggles.WeaponChanger then Toggles.WeaponChanger:SetValue(Config.WEAPON_SKINS_ENABLED ~= false) end
             if Options.KnifeModel then Options.KnifeModel:SetValue(Config.KNIFE_MODEL or "Butterfly Knife") end
