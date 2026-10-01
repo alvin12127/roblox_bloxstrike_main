@@ -1,9 +1,17 @@
 -- third person camera
--- method "Push": overwrites Camera.CFrame each frame. This game runs a custom
--- (ClassicCamera) controller, so Humanoid.CameraOffset has no effect here and
--- Push is what actually moves the view behind the rig.
--- method "Offset": the native Humanoid.CameraOffset route, kept for games that
--- do respect it.
+-- Ported as-is from the reference source. Two pieces work together:
+--
+--   1) a __newindex hook on the game metatable. Roblox routes every property
+--      write on every Instance through this metamethod, so the game can be
+--      silently prevented from pushing CameraMode back to LockFirstPerson (and
+--      from resetting the zoom limits) whenever it sets up the view.
+--
+--   2) a per frame write of CameraMode = Classic plus CameraMin/MaxZoomDistance
+--      pinned to the same number. Equal min and max is what locks the camera at
+--      exactly that distance behind the character.
+--
+-- Nothing here touches Camera.CFrame or the character rig, which is why the
+-- character no longer gets dragged along with the view.
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
@@ -16,111 +24,59 @@ local ThirdPerson = {
 }
 
 local storedConfig = nil
-local previousCameraMode = nil
-local clipParams = RaycastParams.new()
-clipParams.FilterType = Enum.RaycastFilterType.Exclude
-clipParams.IgnoreWater = true
+local metaHooked = false
+local originalNewIndex = nil
+local forcedFirstPerson = false
 
--- keeps the camera in front of geometry instead of letting it slide through walls
-local function clipDistance(anchor, direction, distance)
-    local camera = Workspace.CurrentCamera
-    if not camera then return distance end
+-- installs the metamethod guard once
+local function installMetaHook()
+    if metaHooked then return end
+    if not (getrawmetatable and setreadonly and newcclosure) then return end
 
-    local character = LocalPlayer.Character or camera
-    if clipParams.FilterDescendantsInstances[1] ~= character then
-        clipParams.FilterDescendantsInstances = character and { character, camera } or { camera }
-    end
+    local ok, mt = pcall(getrawmetatable, game)
+    if (not ok) or (type(mt) ~= "table") then return end
 
-    local ok, result = pcall(Workspace.Raycast, Workspace, anchor, direction * distance, clipParams)
-    if ok and result and result.Distance then
-        return math.max(result.Distance - 0.6, 2)
-    end
+    local oldNewIndex = mt.__newindex
+    if type(oldNewIndex) ~= "function" then return end
 
-    return distance
-end
+    originalNewIndex = oldNewIndex
+    metaHooked = true
 
-local function getHumanoid()
-    local char = LocalPlayer.Character
-    if not char or char.Parent == nil then return nil end
-    return char:FindFirstChildOfClass("Humanoid")
-end
+    setreadonly(mt, false)
 
-local function restoreOnce()
-    if previousCameraMode ~= nil then
-        pcall(function() LocalPlayer.CameraMode = previousCameraMode end)
-        previousCameraMode = nil
-    end
+    mt.__newindex = newcclosure(function(self, key, value)
+        if self == LocalPlayer and storedConfig and storedConfig.THIRDPERSON_ENABLED then
+            local dist = math.clamp(storedConfig.THIRDPERSON_DISTANCE or 10, 5, 50)
 
-    local humanoid = getHumanoid()
-    if humanoid then
-        pcall(function() humanoid.CameraOffset = Vector3.zero end)
-    end
-end
-
-local function applyOffset(config)
-    local humanoid = getHumanoid()
-    if not humanoid then return end
-
-    -- LockFirstPerson refuses any offset, so classic mode has to be active
-    if LocalPlayer.CameraMode ~= Enum.CameraMode.Classic then
-        if previousCameraMode == nil then
-            previousCameraMode = LocalPlayer.CameraMode
+            if key == "CameraMode" then
+                return oldNewIndex(self, key, Enum.CameraMode.Classic)
+            elseif key == "CameraMaxZoomDistance" then
+                return oldNewIndex(self, key, dist)
+            elseif key == "CameraMinZoomDistance" then
+                return oldNewIndex(self, key, dist)
+            end
         end
-        pcall(function() LocalPlayer.CameraMode = Enum.CameraMode.Classic end)
-    end
 
-    local distance = tonumber(config.THIRDPERSON_DISTANCE) or 9
-    local height = tonumber(config.THIRDPERSON_HEIGHT) or 0
+        return oldNewIndex(self, key, value)
+    end)
 
-    humanoid.CameraOffset = Vector3.new(0, height, -distance)
+    setreadonly(mt, true)
 end
 
--- fallback that works even when the game drives a Scriptable camera
-local function applyPush(config)
-    local char = LocalPlayer.Character
-    if not char or char.Parent == nil then return end
-    if char:GetAttribute("Dead") == true then return end
+local function restoreMetaHook()
+    if (not metaHooked) or (not originalNewIndex) then return end
 
-    local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso")
-    if not root or not root:IsA("BasePart") then return end
+    pcall(function()
+        local ok, mt = pcall(getrawmetatable, game)
+        if ok and type(mt) == "table" then
+            setreadonly(mt, false)
+            mt.__newindex = originalNewIndex
+            setreadonly(mt, true)
+        end
+    end)
 
-    local camera = Workspace.CurrentCamera
-    if not camera then return end
-
-    local ok, rotation = pcall(function() return camera.CFrame.Rotation end)
-    if not ok or not rotation then return end
-
-    local head = char:FindFirstChild("Head")
-    local headOffsetY = head and (head.Position.Y - root.Position.Y) or 0
-
-    local distanceRaw = tonumber(config.THIRDPERSON_DISTANCE) or 9
-    local height = tonumber(config.THIRDPERSON_HEIGHT) or 0
-
-    local anchor = root.Position + Vector3.new(0, headOffsetY + height, 0)
-    local direction = rotation.LookVector * -1
-
-    local distance = clipDistance(anchor, direction, distanceRaw)
-    local position = anchor + (direction * distance)
-
-    if camera then
-        pcall(function() camera.CFrame = CFrame.new(position) * rotation end)
-    end
-end
-
-local function onFrame()
-    local config = storedConfig
-    if not config then return end
-
-    if config.THIRDPERSON_ENABLED ~= true then
-        restoreOnce()
-        return
-    end
-
-    if (config.THIRDPERSON_METHOD or "Offset") == "Offset" then
-        applyOffset(config)
-    else
-        applyPush(config)
-    end
+    metaHooked = false
+    originalNewIndex = nil
 end
 
 function ThirdPerson.init(Config)
@@ -129,8 +85,38 @@ function ThirdPerson.init(Config)
 
     storedConfig = Config
 
+    -- same as the reference: install the guard off the main path
+    task.spawn(function()
+        pcall(installMetaHook)
+    end)
+
     ThirdPerson.Connection = RunService.RenderStepped:Connect(function()
-        pcall(onFrame)
+        pcall(function()
+            if (not storedConfig) or (not storedConfig.THIRDPERSON_ENABLED) then
+                -- same as the reference toggle callback: drop back to first
+                -- person once, instead of writing it every frame
+                if not forcedFirstPerson then
+                    forcedFirstPerson = true
+                    LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
+                end
+                return
+            end
+
+            forcedFirstPerson = false
+
+            local clampedDist = math.clamp(storedConfig.THIRDPERSON_DISTANCE or 10, 5, 50)
+
+            LocalPlayer.CameraMode = Enum.CameraMode.Classic
+            LocalPlayer.CameraMaxZoomDistance = clampedDist
+            LocalPlayer.CameraMinZoomDistance = clampedDist
+        end)
+    end)
+end
+
+-- mirrors the reference toggle callback: force first person back on disable
+function ThirdPerson.disable()
+    pcall(function()
+        LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
     end)
 end
 
@@ -140,7 +126,9 @@ function ThirdPerson.cleanup()
         ThirdPerson.Connection = nil
     end
 
-    restoreOnce()
+    restoreMetaHook()
+    ThirdPerson.disable()
+
     storedConfig = nil
     ThirdPerson.Initialized = false
 end

@@ -65,9 +65,18 @@ local Config = {
     ANTIAIM_ENABLED = false,
     ANTIAIM_PITCH = 60,
     THIRDPERSON_ENABLED = false,
-    THIRDPERSON_METHOD = "Push",
     THIRDPERSON_DISTANCE = 9,
     THIRDPERSON_HEIGHT = 0,
+
+    -- world
+    CAMERA_FOV_ENABLED = false,
+    CAMERA_FOV_VALUE = 90,
+    NO_SMOKE = false,
+
+    -- gloves
+    GLOVE_CHANGER_ENABLED = false,
+    GLOVE_MODEL = "Default",
+    GLOVE_SKIN = "Stock",
 
     -- utilities
     ANTI_FLASH_ENABLED = true,
@@ -214,9 +223,18 @@ local DEFAULT_VALUES = {
     ANTIAIM_ENABLED = false,
     ANTIAIM_PITCH = 60,
     THIRDPERSON_ENABLED = false,
-    THIRDPERSON_METHOD = "Push",
     THIRDPERSON_DISTANCE = 9,
     THIRDPERSON_HEIGHT = 0,
+
+    -- world
+    CAMERA_FOV_ENABLED = false,
+    CAMERA_FOV_VALUE = 90,
+    NO_SMOKE = false,
+
+    -- gloves
+    GLOVE_CHANGER_ENABLED = false,
+    GLOVE_MODEL = "Default",
+    GLOVE_SKIN = "Stock",
     WINDOW_SIZE_X = 442,
     WINDOW_SIZE_Y = 292,
     TOGGLE_UI_KEY = "Insert",
@@ -418,7 +436,12 @@ function Config.save()
         THIRDPERSON_ENABLED = (Config.THIRDPERSON_ENABLED == true),
         THIRDPERSON_DISTANCE = Config.THIRDPERSON_DISTANCE or 9,
         THIRDPERSON_HEIGHT = Config.THIRDPERSON_HEIGHT or 0,
-        THIRDPERSON_METHOD = (Config.THIRDPERSON_METHOD == "Offset") and "Offset" or "Push",
+        CAMERA_FOV_ENABLED = (Config.CAMERA_FOV_ENABLED == true),
+        CAMERA_FOV_VALUE = Config.CAMERA_FOV_VALUE or 90,
+        NO_SMOKE = (Config.NO_SMOKE == true),
+        GLOVE_CHANGER_ENABLED = (Config.GLOVE_CHANGER_ENABLED == true),
+        GLOVE_MODEL = Config.GLOVE_MODEL or "Default",
+        GLOVE_SKIN = Config.GLOVE_SKIN or "Stock",
         BULLET_TRACER_ENABLED = (Config.BULLET_TRACER_ENABLED == true),
         BULLET_TRACER_THICKNESS = Config.BULLET_TRACER_THICKNESS or 1.5,
         BULLET_TRACER_DURATION = Config.BULLET_TRACER_DURATION or 0.6,

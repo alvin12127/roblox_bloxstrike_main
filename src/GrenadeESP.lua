@@ -57,6 +57,24 @@ local lastScan = 0
 
 local diagnosticsLogged = 0
 local lastSignature = nil
+local errorsLogged = 0
+local lastSummary = 0
+
+-- an error inside the throttled block used to be swallowed silently, which is
+-- why nothing ever reached the console
+local function reportError(message)
+    errorsLogged = errorsLogged + 1
+
+    if errorsLogged <= 3 then
+        pcall(warn, "[Bloxstrike] grenade esp scan error: " .. tostring(message))
+    end
+end
+
+local function countEntries()
+    local total = 0
+    for _ in pairs(entries) do total = total + 1 end
+    return total
+end
 
 local function profileColor(category)
     return (category == PROFILE_C4) and Color3.fromRGB(255, 70, 70) or Color3.fromRGB(255, 190, 70)
@@ -359,6 +377,15 @@ local function reportMatches(matched)
             end
         end
     end
+
+    -- heartbeat so the module is provably alive even when nothing changes
+    local now = os.clock()
+    if (now - lastSummary) >= 10 then
+        lastSummary = now
+        pcall(warn, string.format(
+            "[Bloxstrike] grenade esp alive: %d matched, %d drawn", #names, countEntries()
+        ))
+    end
 end
 
 function GrenadeESP.init(Config)
@@ -377,17 +404,22 @@ function GrenadeESP.init(Config)
             if (now - lastScan) >= SCAN_INTERVAL then
                 lastScan = now
 
-                local seen = collapseMatches(scanForObjects())
-                reportMatches(seen)
-                pruneUnmatched(seen)
+                local ok, err = pcall(function()
+                    local seen = collapseMatches(scanForObjects())
+                    reportMatches(seen)
+                    pruneUnmatched(seen)
 
-                for inst, category in pairs(seen) do
-                    ensureDrawings(inst, category)
-                end
+                    for inst, category in pairs(seen) do
+                        ensureDrawings(inst, category)
+                    end
+                end)
+
+                if not ok then reportError(err) end
             end
         end)
 
-        pcall(updateDrawings)
+        local okDraw, errDraw = pcall(updateDrawings)
+        if not okDraw then reportError(errDraw) end
     end)
 end
 

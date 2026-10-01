@@ -12,7 +12,7 @@ local UIManager = {
     Connections = {}
 }
 
-function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallback, HitSound)
+function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallback, HitSound, GloveChanger)
     if type(WeaponEngine) == "function" and unloadCallback == nil then
         unloadCallback = WeaponEngine
         WeaponEngine = nil
@@ -633,6 +633,87 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         end
     })
 
+    -- camera and world
+    local WorldBox = Tabs.Movement:AddRightGroupbox("Camera & World")
+
+    WorldBox:AddToggle("CustomFov", {
+        Text = "Custom camera FOV",
+        Default = (Config.CAMERA_FOV_ENABLED == true),
+        Tooltip = "Overrides the camera field of view. The original value is restored when switched off.",
+        Callback = function(Value)
+            updateSetting("CAMERA_FOV_ENABLED", Value)
+        end
+    })
+
+    WorldBox:AddSlider("CameraFovValue", {
+        Text = "FOV",
+        Default = Config.CAMERA_FOV_VALUE or 90,
+        Min = 30,
+        Max = 120,
+        Rounding = 0,
+        Compact = false,
+        Suffix = "°",
+        Callback = function(Value)
+            updateSetting("CAMERA_FOV_VALUE", Value)
+        end
+    })
+
+    WorldBox:AddToggle("NoSmoke", {
+        Text = "No smoke",
+        Default = (Config.NO_SMOKE == true),
+        Tooltip = "Hides detonated smoke clouds on your client",
+        Callback = function(Value)
+            updateSetting("NO_SMOKE", Value)
+        end
+    })
+
+    -- gloves
+    local GloveBox = Tabs.Weapons:AddLeftGroupbox("Glove Changer")
+
+    GloveBox:AddToggle("GloveChanger", {
+        Text = "Glove changer",
+        Default = (Config.GLOVE_CHANGER_ENABLED == true),
+        Tooltip = "Replaces the equipped gloves with the selected model",
+        Callback = function(Value)
+            updateSetting("GLOVE_CHANGER_ENABLED", Value)
+            if GloveChanger and GloveChanger.applyLive then GloveChanger.applyLive() end
+        end
+    })
+
+    local gloveValues = { "Default" }
+    if GloveChanger and GloveChanger.getGloveModels then
+        for _, gloveName in ipairs(GloveChanger.getGloveModels()) do
+            table.insert(gloveValues, gloveName)
+        end
+    end
+
+    local gloveDefault = Config.GLOVE_MODEL or "Default"
+    if not table.find(gloveValues, gloveDefault) then gloveDefault = "Default" end
+
+    GloveBox:AddDropdown("GloveModel", {
+        Values = gloveValues,
+        Default = gloveDefault,
+        Multi = false,
+        Text = "Glove model",
+        Tooltip = "Glove models that exist in the game assets",
+        Callback = function(Value)
+            updateSetting("GLOVE_MODEL", Value or "Default")
+            if GloveChanger and GloveChanger.applyLive then GloveChanger.applyLive() end
+        end
+    })
+
+    GloveBox:AddInput("GloveSkin", {
+        Text = "Glove skin",
+        Default = Config.GLOVE_SKIN or "Stock",
+        Numeric = false,
+        Finished = true,
+        Tooltip = "Skin name for the selected gloves, e.g. Stock",
+        Callback = function(Value)
+            updateSetting("GLOVE_SKIN", tostring(Value or "Stock"))
+            if GloveChanger and GloveChanger.applyLive then GloveChanger.applyLive() end
+        end
+    })
+
     -- skins tab
     local SkinsBox = Tabs.Skins:AddLeftGroupbox("Skin Changer")
     SkinsBox:AddToggle("AutoLaunchSkinchanger", {
@@ -756,17 +837,6 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
         Tooltip = "Pulls the camera back behind the rig. Mouse look is unaffected.",
         Callback = function(Value)
             updateSetting("THIRDPERSON_ENABLED", Value)
-        end
-    })
-
-    CameraBox:AddDropdown("ThirdPersonMethod", {
-        Values = { "Push", "Offset" },
-        Default = Config.THIRDPERSON_METHOD or "Push",
-        Multi = false,
-        Text = "Method",
-        Tooltip = "Push: overwrites the camera directly - the one that actually works here.\nOffset:native Humanoid.CameraOffset, mostly a no-op in games with a custom camera.",
-        Callback = function(Value)
-            updateSetting("THIRDPERSON_METHOD", (Value == "Offset") and "Offset" or "Push")
         end
     })
 
@@ -898,6 +968,12 @@ function UIManager.init(Config, Library, SkinChanger, WeaponEngine, unloadCallba
             if Toggles.ForceFullAuto then Toggles.ForceFullAuto:SetValue(Config.FORCE_FULL_AUTO) end
             if Toggles.NoRecoil then Toggles.NoRecoil:SetValue(Config.NO_RECOIL) end
             if Toggles.NoSpread then Toggles.NoSpread:SetValue(Config.NO_SPREAD) end
+            if Toggles.CustomFov then Toggles.CustomFov:SetValue(Config.CAMERA_FOV_ENABLED) end
+            if Options.CameraFovValue then Options.CameraFovValue:SetValue(Config.CAMERA_FOV_VALUE or 90) end
+            if Toggles.NoSmoke then Toggles.NoSmoke:SetValue(Config.NO_SMOKE) end
+            if Toggles.GloveChanger then Toggles.GloveChanger:SetValue(Config.GLOVE_CHANGER_ENABLED) end
+            if Options.GloveModel then Options.GloveModel:SetValue(Config.GLOVE_MODEL or "Default") end
+            if Options.GloveSkin then Options.GloveSkin:SetValue(Config.GLOVE_SKIN or "Stock") end
             if Toggles.Wallbang then Toggles.Wallbang:SetValue(Config.WALLBANG_ENABLED) end
 
             if Toggles.EspMaster then Toggles.EspMaster:SetValue(Config.ESP_ENABLED) end

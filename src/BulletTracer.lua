@@ -156,15 +156,18 @@ function BulletTracer.push(hitData, Config)
 
     local endPoint = origin + (direction * distance)
 
-    -- A shot always leaves the crosshair, so the impact point projects to the
-    -- exact screen centre. Drawing camera -> impact would therefore be a zero
-    -- length line and never visible, so the tracer starts at the muzzle instead:
-    -- the view model gun sits down and to the right of the camera.
+    -- A shot always leaves the crosshair, so the impact point always projects to
+    -- the exact screen centre. Drawing camera -> impact would be a zero length
+    -- line and never visible, so the beam starts at the muzzle instead: the view
+    -- model gun sits down and to the right of the camera. The first slice is then
+    -- trimmed off, because a line starting inside our own body is not visible.
     local cameraCFrame = camera.CFrame
-    local startPoint = cameraCFrame.Position
+    local muzzlePoint = cameraCFrame.Position
         + (cameraCFrame.RightVector * 0.38)
         + (cameraCFrame.UpVector * -0.28)
         + (cameraCFrame.LookVector * 0.75)
+
+    local startPoint = muzzlePoint:Lerp(endPoint, 0.12)
 
     local okStart, startSp = pcall(camera.WorldToViewportPoint, camera, startPoint)
     local okTo, toSp = pcall(camera.WorldToViewportPoint, camera, endPoint)
