@@ -61,10 +61,11 @@ local function applyEffects()
         end
     end
 
-    -- only write when it actually differs, so we do not fight the game's own
-    -- character system every single frame
-    if changed and targetCFrame ~= root.CFrame then
-        root.CFrame = targetCFrame
+    -- always write when changed is true, CFrame comparison can be unreliable
+    if changed then
+        pcall(function()
+            root.CFrame = targetCFrame
+        end)
     end
 end
 

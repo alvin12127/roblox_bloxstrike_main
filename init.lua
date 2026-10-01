@@ -148,6 +148,7 @@ reportInit("InstantReload", function() InstantReload.init(Config) end)
 -- cleanup
 local renderConn = nil
 local keyConn = nil
+local SkinChanger = nil
 
 local function cleanup()
     if renderConn then pcall(function() renderConn:Disconnect() end) end
@@ -192,38 +193,70 @@ reportInit("UIManager", function()
     UIManager.init(Config, Arvn, nil, WeaponEngine, cleanup, HitSound)
 end)
 
--- Load skinchanger internally
-local SkinChanger = nil
+-- Load skinchanger integrated into main window
 reportInit("SkinChanger", function()
-    local scConfig = import("Config")
-    local scDatabase = import("Database")
-    local scEngine = import("Engine")
-    local scAPI = import("API")
-    local scKnifeCatalog = import("KnifeCatalog")
-    local scGunCatalog = import("GunCatalog")
-    local scGloveCatalog = import("GloveCatalog")
-    local scUIManager = import("UIManager")
-    
+    -- Skinchanger has its own module directory - load from there
+    local scModules = {}
+    local function scImport(moduleName)
+        if scModules[moduleName] then return scModules[moduleName] end
+
+        local paths = {
+            "roblox_bloxstrike_SC/src/" .. moduleName .. ".lua",
+            "Bloxstrike-Skinchanger/src/" .. moduleName .. ".lua",
+        }
+        
+        if type(readfile) == "function" then
+            for _, path in ipairs(paths) do
+                local ok, content = pcall(readfile, path)
+                if ok and content then
+                    local fn = loadstring(content)
+                    if fn then
+                        local res = fn()
+                        scModules[moduleName] = res
+                        return res
+                    end
+                end
+            end
+        end
+
+        -- Remote GitHub fallback
+        local okHttp, remoteContent = pcall(function()
+            return game:HttpGet("https://raw.githubusercontent.com/alvin12127/roblox_bloxstrike_SC/main/src/" .. moduleName .. ".lua?t=" .. tostring(os.time()))
+        end)
+        if okHttp and remoteContent and #remoteContent > 0 then
+            local fn = loadstring(remoteContent)
+            if fn then
+                local res = fn()
+                scModules[moduleName] = res
+                return res
+            end
+        end
+
+        error("[Skinchanger] Failed to import: " .. tostring(moduleName))
+    end
+
+    local scConfig       = scImport("Config")
+    local scDatabase     = scImport("Database")
+    local scEngine       = scImport("Engine")
+    local scAPI          = scImport("API")
+    local scKnifeCatalog = scImport("KnifeCatalog")
+    local scGunCatalog   = scImport("GunCatalog")
+    local scGloveCatalog = scImport("GloveCatalog")
+    local scUIManager    = scImport("UIManager")
+
     scAPI.bind(scConfig, scDatabase, scEngine, scKnifeCatalog, scGunCatalog)
     scAPI.bindGloveCatalog(scGloveCatalog)
     scAPI.init()
-    
+
     SkinChanger = {
         API = scAPI,
         UIManager = scUIManager,
         Config = scConfig
     }
-    
-    scUIManager.init(scConfig, Arvn, scAPI, scDatabase, scKnifeCatalog, scGunCatalog, scGloveCatalog)
-    
-    -- Show skinchanger UI by default
-    task.spawn(function()
-        task.wait(1)
-        if scUIManager and scUIManager.show then
-            scUIManager.show()
-        end
-    end)
-    
+
+    -- Pass the main window so skinchanger adds tabs to it
+    scUIManager.init(scConfig, Arvn, scAPI, scDatabase, scKnifeCatalog, scGunCatalog, scGloveCatalog, UIManager.Window)
+
     _G.SkinChanger = scAPI
 end)
 

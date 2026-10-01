@@ -1082,31 +1082,19 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
         end
     })
 
-    -- skins tab
+    -- skins tab (skinchanger is integrated as its own tab by scUIManager)
     local SkinsTab = Main:Tab({Name = "Skins", Icon = "palette"})
     local SkinsBox = SkinsTab:Section("Skin Changer")
-
-    SkinsBox:Toggle({
-        Name = "Show Skin Changer",
-        Default = false,
-        Description = "Toggle the skin changer window",
-        Callback = function(on)
-            if SkinChanger and SkinChanger.UIManager then
-                if on then
-                    SkinChanger.UIManager.show()
-                else
-                    SkinChanger.UIManager.hide()
-                end
-            end
-        end
-    })
 
     SkinsBox:Button({
         Name = "Refresh Skins",
         Callback = function()
-            if SkinChanger and SkinChanger.API and SkinChanger.API.refresh then
-                SkinChanger.API.refresh()
+            local sc = _G.SkinChanger
+            if sc and sc.refresh then
+                pcall(sc.refresh)
                 Arvn:Notify({Title = "Skinchanger", Content = "Refreshed!", Kind = "Success"})
+            else
+                Arvn:Notify({Title = "Skinchanger", Content = "Not loaded yet", Kind = "Error"})
             end
         end
     })
