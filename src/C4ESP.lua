@@ -247,7 +247,11 @@ end
 local function update()
     if not storedConfig then return end
 
-    if storedConfig.C4_ESP_ENABLED ~= true then
+    -- Default to enabled if not explicitly disabled
+    local enabled = storedConfig.C4_ESP_ENABLED
+    if enabled == nil then enabled = true end
+    
+    if not enabled then
         hideAll()
         return
     end

@@ -282,6 +282,20 @@ local function jumpWithHumanoid(humanoid)
     pcall(function()
         humanoid.Jump = true
     end)
+    
+    -- Force jump by setting JumpPower and using ChangeState
+    pcall(function()
+        humanoid.JumpPower = 50
+        humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+    end)
+    
+    -- Alternative: use MoveDirection to trigger jump
+    pcall(function()
+        local moveDir = humanoid.MoveDirection
+        if moveDir.Magnitude > 0 then
+            humanoid:Move(moveDir, true)
+        end
+    end)
 end
 
 -- writes the current bhop decision into a movement sample, in place
@@ -398,15 +412,16 @@ local function update(dt)
 
     -- "Legit" waits for the player to hold space, "Rage" hops on its own
     local mode = storedConfig.BHOP_MODE
-    if type(mode) ~= "string" then mode = "Legit" end
+    if type(mode) ~= "string" then mode = "Rage" end
     local isRage = (string.lower(mode) == "rage")
 
+    -- In Rage mode, always jump. In Legit mode, require space
     if (not isRage) and (not isSpaceHeld()) then
         Bhop.WantsJump = false
         return
     end
 
-    local minSpeed = getConfigNumber("BHOP_MIN_SPEED", 10)
+    local minSpeed = getConfigNumber("BHOP_MIN_SPEED", 0)
     local speed = getHorizontalSpeed(root)
 
     -- below the floor speed the hop is dead anyway, unless the player is still

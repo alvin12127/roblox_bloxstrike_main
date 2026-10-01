@@ -182,9 +182,6 @@ function ThirdPerson.init(Config)
             LocalPlayer.CameraMode = Enum.CameraMode.Classic
             LocalPlayer.CameraMaxZoomDistance = dist
             LocalPlayer.CameraMinZoomDistance = dist
-            
-            -- Apply aim fix to prevent damage loss in third person
-            pcall(applyAimFix)
         end)
     end)
 end

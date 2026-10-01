@@ -216,6 +216,14 @@ reportInit("SkinChanger", function()
     
     scUIManager.init(scConfig, Arvn, scAPI, scDatabase, scKnifeCatalog, scGunCatalog, scGloveCatalog)
     
+    -- Show skinchanger UI by default
+    task.spawn(function()
+        task.wait(1)
+        if scUIManager and scUIManager.show then
+            scUIManager.show()
+        end
+    end)
+    
     _G.SkinChanger = scAPI
 end)
 
