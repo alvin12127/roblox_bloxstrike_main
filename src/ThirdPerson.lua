@@ -1,69 +1,76 @@
 -- third person camera
--- Instead of hooking __newindex (which breaks other scripts' Instance writes),
--- we watch CameraMode changes via GetPropertyChangedSignal and immediately
--- restore Classic. This never touches the global metatable, so damage dealing,
--- ESP, and every other feature keeps working while third person is active.
---
--- How it works:
---   1) RenderStepped writes CameraMode=Classic and pins zoom limits each frame
---   2) A PropertyChangedSignal on CameraMode restores Classic the instant the
---      game tries to force LockFirstPerson back, even between our frames.
+-- Uses the approach from the reference source: position the camera directly
+-- via CFrame in a BindToRenderStep callback instead of modifying CameraMode
+-- or CameraMaxZoomDistance. This avoids interfering with the game's camera
+-- system and metatable, which was causing damage-dealing scripts to fail.
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
 
 local LocalPlayer = Players.LocalPlayer
 
 local ThirdPerson = {
     Initialized = false,
-    Connection = nil,
-    ModeWatch = nil
+    StepName = "Bloxstrike_ThirdPerson",
+    WasOn = false,
+    OrigFov = nil
 }
 
 local storedConfig = nil
-local forcedFirstPerson = false
+
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Exclude
+rayParams.FilterDescendantsInstances = {}
 
 local function isEnabled()
     return storedConfig and storedConfig.THIRDPERSON_ENABLED == true
 end
 
 local function currentDistance()
-    return math.clamp(tonumber(storedConfig and storedConfig.THIRDPERSON_DISTANCE) or 10, 5, 50)
+    return math.clamp(tonumber(storedConfig and storedConfig.THIRDPERSON_DISTANCE) or 10, 4, 40)
 end
 
-local function forceClassic()
-    pcall(function()
-        if LocalPlayer.CameraMode ~= Enum.CameraMode.Classic then
-            LocalPlayer.CameraMode = Enum.CameraMode.Classic
-        end
-        local dist = currentDistance()
-        if LocalPlayer.CameraMaxZoomDistance ~= dist then
-            LocalPlayer.CameraMaxZoomDistance = dist
-        end
-        if LocalPlayer.CameraMinZoomDistance ~= dist then
-            LocalPlayer.CameraMinZoomDistance = dist
-        end
-    end)
+local function currentHeight()
+    return tonumber(storedConfig and storedConfig.THIRDPERSON_HEIGHT) or 1.5
 end
 
--- Watch CameraMode so we restore Classic the instant the game overrides us.
--- This replaces the old __newindex metatable hook entirely.
-local function startModeWatch()
-    if ThirdPerson.ModeWatch then return end
-
-    pcall(function()
-        ThirdPerson.ModeWatch = LocalPlayer:GetPropertyChangedSignal("CameraMode"):Connect(function()
-            if isEnabled() and LocalPlayer.CameraMode ~= Enum.CameraMode.Classic then
-                forceClassic()
-            end
-        end)
-    end)
+local function guardAllowed()
+    return storedConfig and storedConfig.THIRDPERSON_GUARD ~= false
 end
 
-local function stopModeWatch()
-    if ThirdPerson.ModeWatch then
-        pcall(function() ThirdPerson.ModeWatch:Disconnect() end)
-        ThirdPerson.ModeWatch = nil
+-- Position camera behind the character, raycast for wall collision
+local function thirdStep(c)
+    local ch = LocalPlayer.Character
+    local head = ch and (ch:FindFirstChild("Head") or ch.PrimaryPart)
+    if not head then return end
+
+    local rot = c.CFrame - c.CFrame.Position
+    local pivot = head.Position + Vector3.new(0, currentHeight(), 0)
+    local target = pivot + rot:VectorToWorldSpace(Vector3.new(1.5, 0, currentDistance()))
+
+    -- Wall collision raycast
+    if guardAllowed() then
+        rayParams.FilterDescendantsInstances = {ch}
+        local dir = target - pivot
+        local hit = Workspace:Raycast(pivot, dir, rayParams)
+        if hit then
+            target = hit.Position - dir.Unit * 0.6
+        end
+    end
+
+    c.CFrame = CFrame.new(target) * rot
+end
+
+local function cameraStep()
+    local c = Workspace.CurrentCamera
+    if not c then return end
+
+    if isEnabled() then
+        ThirdPerson.WasOn = true
+        pcall(thirdStep, c)
+    elseif ThirdPerson.WasOn then
+        ThirdPerson.WasOn = false
     end
 end
 
@@ -73,41 +80,24 @@ function ThirdPerson.init(Config)
 
     storedConfig = Config
 
-    startModeWatch()
-
-    ThirdPerson.Connection = RunService.RenderStepped:Connect(function()
-        pcall(function()
-            if not isEnabled() then
-                if not forcedFirstPerson then
-                    forcedFirstPerson = true
-                    LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
-                end
-                stopModeWatch()
-                return
-            end
-
-            forcedFirstPerson = false
-            startModeWatch()
-            forceClassic()
+    -- Bind after camera priority so our CFrame write wins
+    pcall(function()
+        RunService:BindToRenderStep(ThirdPerson.StepName, Enum.RenderPriority.Last.Value + 2, function()
+            pcall(cameraStep)
         end)
     end)
 end
 
 function ThirdPerson.disable()
-    pcall(function()
-        LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
-    end)
+    ThirdPerson.WasOn = false
 end
 
 function ThirdPerson.cleanup()
-    if ThirdPerson.Connection then
-        pcall(function() ThirdPerson.Connection:Disconnect() end)
-        ThirdPerson.Connection = nil
-    end
+    pcall(function()
+        RunService:UnbindFromRenderStep(ThirdPerson.StepName)
+    end)
 
-    stopModeWatch()
-    ThirdPerson.disable()
-
+    ThirdPerson.WasOn = false
     storedConfig = nil
     ThirdPerson.Initialized = false
 end
