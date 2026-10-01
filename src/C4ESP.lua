@@ -246,30 +246,71 @@ local function drawCarrier(camera, character, color)
     end)
 end
 
+local bombDiagLogged = false
+
 local function drawWorldBomb(camera, model, color, label)
     local item = makeItem("World")
-    if not item then return end
+    if not item then
+        if not bombDiagLogged then
+            bombDiagLogged = true
+            warn("[Bloxstrike] C4 ESP: draw skipped - no drawing item for 'World'")
+        end
+        return
+    end
 
-    local ok, box, center = pcall(function()
+    -- Resolve a world position and a size. GetBoundingBox() fails on models
+    -- without a PrimaryPart, so fall back to any BasePart they contain.
+    local position = nil
+    local size = nil
+
+    local okBox, box, center = pcall(function()
         return model:GetBoundingBox()
     end)
 
-    if (not ok) or (not box) or (not center) then
+    if okBox and box and center then
+        position = center.Position
+        size = box.Size
+    else
+        pcall(function()
+            local part = model.PrimaryPart or model:FindFirstChildOfClass("BasePart")
+            if part then
+                position = part.Position
+                size = part.Size
+            end
+        end)
+    end
+
+    if not position then
+        if not bombDiagLogged then
+            bombDiagLogged = true
+            warn("[Bloxstrike] C4 ESP: draw skipped - no position for "
+                .. tostring(model.Name) .. " (GetBoundingBox failed)")
+        end
         item.Box.Visible = false
         item.Label.Visible = false
         return
     end
 
-    local okScreen, screen = pcall(camera.WorldToViewportPoint, camera, center.Position)
+    local okScreen, screen = pcall(camera.WorldToViewportPoint, camera, position)
 
     if (not okScreen) or (not screen) or (screen.Z <= 0) then
+        if not bombDiagLogged then
+            bombDiagLogged = true
+            warn("[Bloxstrike] C4 ESP: draw skipped - behind camera or off screen (Z="
+                .. tostring(screen and screen.Z) .. ") for " .. tostring(model.Name))
+        end
         item.Box.Visible = false
         item.Label.Visible = false
         return
     end
 
-    local size = box.Size
-    local width = math.max(size.X, size.Y, size.Z, 2)
+    -- Reached the drawing stage: clear the diag flag so a later failure logs again
+    bombDiagLogged = false
+
+    local sx = size and size.X or 1
+    local sy = size and size.Y or 1
+    local sz = size and size.Z or 1
+    local width = math.max(sx, sy, sz, 2)
 
     pcall(function()
         item.Box.Position = Vector2.new(screen.X - (width / 2), screen.Y - (width / 2))

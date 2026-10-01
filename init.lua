@@ -260,6 +260,9 @@ reportInit("SkinChanger", function()
 
     -- Bind the catalogs before init so the visual 3D UI gets built
     scUIManager.bindCatalogs(scKnifeCatalog, scGunCatalog)
+    if scUIManager.bindGloveCatalog then
+        scUIManager.bindGloveCatalog(scGloveCatalog)
+    end
 
     SkinChanger = {
         API = scAPI,
