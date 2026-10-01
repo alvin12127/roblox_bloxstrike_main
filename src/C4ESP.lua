@@ -246,16 +246,23 @@ local function drawCarrier(camera, character, color)
     end)
 end
 
-local bombDiagLogged = false
-local bombDrawnNames = {}
+local lastDrawLog = 0
+
+-- Throttled diagnostic logger. The previous one-shot flags meant the very first
+-- message could be missed, after which nothing ever printed again. This emits
+-- at most once per second so the current draw state is always visible in F9.
+local function drawLog(msg)
+    local now = os.clock()
+    if (now - lastDrawLog) >= 1 then
+        lastDrawLog = now
+        warn("[Bloxstrike] C4 ESP: " .. msg)
+    end
+end
 
 local function drawWorldBomb(camera, model, color, label)
     local item = makeItem("World")
     if not item then
-        if not bombDiagLogged then
-            bombDiagLogged = true
-            warn("[Bloxstrike] C4 ESP: draw skipped - no drawing item for 'World'")
-        end
+        drawLog("draw skipped - no drawing item for 'World'")
         return
     end
 
@@ -282,11 +289,8 @@ local function drawWorldBomb(camera, model, color, label)
     end
 
     if not position then
-        if not bombDiagLogged then
-            bombDiagLogged = true
-            warn("[Bloxstrike] C4 ESP: draw skipped - no position for "
-                .. tostring(model.Name) .. " (GetBoundingBox failed)")
-        end
+        drawLog("draw skipped - no position for "
+            .. tostring(model.Name) .. " (GetBoundingBox failed)")
         item.Box.Visible = false
         item.Label.Visible = false
         return
@@ -295,18 +299,12 @@ local function drawWorldBomb(camera, model, color, label)
     local okScreen, screen = pcall(camera.WorldToViewportPoint, camera, position)
 
     if (not okScreen) or (not screen) or (screen.Z <= 0) then
-        if not bombDiagLogged then
-            bombDiagLogged = true
-            warn("[Bloxstrike] C4 ESP: draw skipped - behind camera or off screen (Z="
-                .. tostring(screen and screen.Z) .. ") for " .. tostring(model.Name))
-        end
+        drawLog("draw skipped - behind camera or off screen (Z="
+            .. tostring(screen and screen.Z) .. ") for " .. tostring(model.Name))
         item.Box.Visible = false
         item.Label.Visible = false
         return
     end
-
-    -- Reached the drawing stage: clear the diag flag so a later failure logs again
-    bombDiagLogged = false
 
     -- Fixed pixel size, same as the GrenadeESP module. Feeding world-space size
     -- straight into pixel dimensions collapses the box to ~2px (invisible) as
@@ -316,16 +314,11 @@ local function drawWorldBomb(camera, model, color, label)
 
     -- Log the resolved screen position once so we can tell whether the marker
     -- is landing inside the viewport or off screen / behind the camera.
-    if not bombDrawnNames[model] then
-        bombDrawnNames[model] = true
-        pcall(function()
-            warn("[Bloxstrike] C4 ESP drawing world bomb: " .. tostring(model.Name)
-                .. " screen=(" .. tostring(math.floor(screen.X)) .. ", "
-                .. tostring(math.floor(screen.Y)) .. ")"
-                .. " Z=" .. tostring(math.floor(screen.Z))
-                .. " width=" .. tostring(width))
-        end)
-    end
+    drawLog("drawing world bomb: " .. tostring(model.Name)
+        .. " screen=(" .. tostring(math.floor(screen.X)) .. ", "
+        .. tostring(math.floor(screen.Y)) .. ")"
+        .. " Z=" .. tostring(math.floor(screen.Z))
+        .. " width=" .. tostring(width))
 
     pcall(function()
         item.Box.Position = Vector2.new(screen.X - (width / 2), screen.Y - (width / 2))
