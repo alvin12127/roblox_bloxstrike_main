@@ -307,10 +307,11 @@ local function drawWorldBomb(camera, model, color, label)
     -- Reached the drawing stage: clear the diag flag so a later failure logs again
     bombDiagLogged = false
 
-    local sx = size and size.X or 1
-    local sy = size and size.Y or 1
-    local sz = size and size.Z or 1
-    local width = math.max(sx, sy, sz, 2)
+    -- Fixed pixel size, same as the GrenadeESP module. Feeding world-space size
+    -- straight into pixel dimensions collapses the box to ~2px (invisible) as
+    -- soon as the bomb is more than a few studs away. A constant keeps the
+    -- marker readable at any distance.
+    local width = 26
 
     pcall(function()
         item.Box.Position = Vector2.new(screen.X - (width / 2), screen.Y - (width / 2))
