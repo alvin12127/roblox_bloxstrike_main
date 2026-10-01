@@ -321,7 +321,9 @@ local function isPlayable(assetId)
 
     pcall(function() probe:Destroy() end)
 
-    if type(status) ~= "EnumItem" then return false end
+    -- typeof() is required: type() reports Roblox enum values and Vector3 values
+    -- as their raw kind, never as "EnumItem" or "Vector3"
+    if typeof(status) ~= "EnumItem" then return false end
     return status == Enum.AssetFetchStatus.Success
 end
 

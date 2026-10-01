@@ -45,6 +45,7 @@ local CLOUD_PREFIX = "voxelsmoke"
 local CONTAINER_HINTS = { "grenadeparticles", "voxelsmoke", "c4" }
 
 local SCAN_INTERVAL = 0.25
+local CONTAINER_SCAN_INTERVAL = 3
 local FIND_DEPTH = 5
 local GRACE_MISSES = 2
 local PROXIMITY_THRESHOLD = 40
@@ -52,7 +53,9 @@ local PROXIMITY_THRESHOLD = 40
 local entries = {}     -- [instance] = { Box, Text, category }
 local missCount = {}   -- [instance] = consecutive scans without a match
 local matchedNow = {}  -- rebuilt on every scan
+local containers = {}  -- [container instance] = category, refreshed slowly
 local lastScan = 0
+local lastContainerScan = 0
 
 -- exact name match only. Substring matching was what made dropped rifles and
 -- unrelated props register as grenades.
@@ -165,27 +168,56 @@ local function collectFrom(container, containerCategory, depth)
     end
 end
 
--- depth limited traversal with branch pruning: only folders and models are
--- descended into, which keeps the cost on large maps down to almost nothing
-local function scanForObjects()
-    local charsFolder = Workspace:FindFirstChild("Characters")
-    matchedNow = nil
+-- The dump shows the containers always live in fixed spots, so the scan only
+-- looks there instead of walking the whole map:
+--   Workspace.Assets.GrenadeParticles   (thrown grenades)
+--   Workspace.Debris.VoxelSmoke_<id>    (smoke clouds - note: Debris, not Assets)
+--   Workspace.Assets.Weapons.C4         (the bomb)
+local ROOT_NAMES = { "Assets", "Debris" }
 
-    local function search(inst, depth)
-        if depth > FIND_DEPTH or (not inst) then return end
+-- lookup of the container folders, refreshed on a slow timer
+local function findContainers()
+    local found = {}
 
-        for _, child in ipairs(inst:GetChildren()) do
-            if child ~= charsFolder and not (charsFolder and child:IsDescendantOf(charsFolder)) then
+    for _, rootName in ipairs(ROOT_NAMES) do
+        local root = Workspace:FindFirstChild(rootName)
+        if not root then root = game:FindFirstChild(rootName) end
+
+        if root then
+            for _, child in ipairs(root:GetChildren()) do
                 if isContainerName(child.Name) then
-                    collectFrom(child, containerCategory(child.Name), 0)
-                elseif depth < 3 and (child:IsA("Folder") or child:IsA("Model")) then
-                    search(child, depth + 1)
+                    found[child] = containerCategory(child.Name)
+                elseif child:IsA("Folder") or child:IsA("Model") then
+                    -- one more level, this is where Assets.Weapons.C4 sits
+                    for _, grand in ipairs(child:GetChildren()) do
+                        if isContainerName(grand.Name) then
+                            found[grand] = containerCategory(grand.Name)
+                        end
+                    end
                 end
             end
         end
     end
 
-    search(Workspace, 0)
+    return found
+end
+
+local function scanForObjects()
+    local now = os.clock()
+
+    if (now - lastContainerScan) >= CONTAINER_SCAN_INTERVAL then
+        lastContainerScan = now
+        containers = findContainers()
+    end
+
+    matchedNow = nil
+
+    for container, category in pairs(containers) do
+        if container and container.Parent ~= nil then
+            collectFrom(container, category, 0)
+        end
+    end
+
     return matchedNow or {}
 end
 
@@ -384,7 +416,10 @@ function GrenadeESP.cleanup()
 
     entries = {}
     missCount = {}
+    matchedNow = {}
+    containers = {}
     lastScan = 0
+    lastContainerScan = 0
     storedConfig = nil
     GrenadeESP.Initialized = false
 end

@@ -77,7 +77,10 @@ function BulletTracer.push(hitData, Config)
     local direction = hitData.Direction
     local distance = hitData.Distance
 
-    if type(origin) ~= "Vector3" or type(direction) ~= "Vector3" then
+    -- Luau reports Vector3 values through typeof(), never through type(), which
+    -- returns the raw metatable kind. Using type() here made every valid shot
+    -- look like bad geometry and blocked the tracer entirely.
+    if typeof(origin) ~= "Vector3" or typeof(direction) ~= "Vector3" then
         log(3, "unexpected geometry: origin/direction not Vector3")
         return
     end
