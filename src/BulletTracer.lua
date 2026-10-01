@@ -91,6 +91,14 @@ function BulletTracer.push(hitData, Config)
         return
     end
 
+    -- some callers hand over a scaled vector rather than a unit one, which would
+    -- push the end point far outside the viewport and make the line invisible
+    if direction.Magnitude > 0 then
+        direction = direction.Unit
+    end
+
+    distance = math.clamp(distance, 0.5, 2000)
+
     local line = acquireLine()
     if not line then return end
 
@@ -128,23 +136,31 @@ function BulletTracer.push(hitData, Config)
         return
     end
 
-    local duration = Config.BULLET_TRACER_DURATION or 0.6
+    -- a zero duration would release the line on the very next frame
+    local duration = math.max(tonumber(Config.BULLET_TRACER_DURATION) or 0.6, 0.05)
     local thickness = Config.BULLET_TRACER_THICKNESS or 1.5
-    local color = Config.BULLET_TRACER_COLOR
+    local color = Config.BULLET_TRACER_COLOR or Color3.fromRGB(186, 140, 255)
 
-    -- required properties first, optional ones after
-    pcall(function()
+    -- each property gets its own protected assign, so one unsupported property
+    -- can never abort the ones after it and leave the line invisible
+    local okFrom = pcall(function()
         line.From = Vector2.new(startSp.X, startSp.Y)
         line.To = Vector2.new(toSp.X, toSp.Y)
-        line.Color = color or Color3.fromRGB(186, 140, 255)
-        line.Thickness = thickness
-        line.Visible = true
     end)
 
+    local okColor = pcall(function() line.Color = color end)
+    local okThick = pcall(function() line.Thickness = thickness end)
     safeSet(line, "ZIndex", 6)
 
     -- 0.5 is visible under either transparency convention
     safeSet(line, "Transparency", 0.5)
+
+    local okVisible = pcall(function() line.Visible = true end)
+
+    if not okFrom then log(3, "failed: From/To") end
+    if not okColor then log(3, "failed: Color") end
+    if not okThick then log(3, "failed: Thickness") end
+    if not okVisible then log(3, "failed: Visible") end
 
     active[line] = {
         expire = os.clock() + duration,
@@ -152,7 +168,10 @@ function BulletTracer.push(hitData, Config)
         baseThickness = thickness
     }
 
-    log(3, "drew ok")
+    log(3, string.format(
+        "drew ok from=(%.0f,%.0f) to=(%.0f,%.0f) dist=%.1f dur=%.2f",
+        startSp.X, startSp.Y, toSp.X, toSp.Y, distance, duration
+    ))
 end
 
 function BulletTracer.cleanup()

@@ -1,20 +1,18 @@
 -- grenade and c4 esp
--- Ground truth from the game dump: every thrown grenade lives inside one of a
--- handful of containers that always sit a few levels under the workspace, so the
--- scan only walks those branches instead of the whole map:
+-- Name driven, and deliberately simple: the game dump told us exactly what these
+-- objects are called, so matching is a plain name lookup.
 --
---   [Folder] GrenadeParticles  ->  parts named "Smoke Grenade", "HE Grenade",
---                                  "Flashbang", "Molotov", "Decoy Grenade"
---   [Folder] VoxelSmoke_<id>   ->  the detonated smoke cloud (marker = folder)
---   [Folder] C4                ->  the planted / dropped bomb model
+--   grenades  : "Smoke Grenade", "HE Grenade", "Flashbang", "Molotov",
+--               "Decoy Grenade", "Incendiary Grenade"   (thrown, live in
+--               Workspace.Assets.GrenadeParticles)
+--   smoke     : "VoxelSmoke_<id>" folders              (live in Workspace.Debris)
+--   c4        : "C4"                                   (Workspace.Assets.Weapons)
 --
--- Two independent profiles with their own toggles and colors.
+-- Everything else is invisible to this module, which is why dropped rifles never
+-- show up. Two profiles, each own toggle and color.
 
 local RunService = game:GetService("RunService")
-local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
-
-local LocalPlayer = Players.LocalPlayer
 
 local GrenadeESP = {
     Initialized = false,
@@ -23,95 +21,88 @@ local GrenadeESP = {
 
 local storedConfig = nil
 
-local PROFILES = {
-    grenade = {
-        configKey = "GRENADE_ESP_ENABLED",
-        color = Color3.fromRGB(255, 190, 70),
-        names = {
-            "smoke grenade", "he grenade", "incendiary grenade", "decoy grenade",
-            "flashbang", "molotov", "smokegrenade", "hegrenade", "incendiarygrenade",
-            "decoygrenade"
-        }
-    },
-    c4 = {
-        configKey = "C4_ESP_ENABLED",
-        color = Color3.fromRGB(255, 70, 70),
-        names = { "c4", "bomb" }
-    }
+-- straight from the dump
+local GRENADE_NAMES = {
+    "smoke grenade", "he grenade", "incendiary grenade", "decoy grenade",
+    "flashbang", "molotov"
 }
+
+local C4_NAMES = { "c4" }
 
 local CLOUD_PREFIX = "voxelsmoke"
 
-local CONTAINER_HINTS = { "grenadeparticles", "voxelsmoke", "c4" }
+-- where these objects live, with a per-root depth budget. Scanning only these
+-- branches is what keeps the cost near zero on large maps.
+local SEARCH_ROOTS = {
+    { name = "Assets",    depth = 4 },
+    { name = "Debris",    depth = 3 },
+    { name = "Workspace", depth = 2 }
+}
 
 local SCAN_INTERVAL = 0.25
-local CONTAINER_SCAN_INTERVAL = 3
-local FIND_DEPTH = 5
 local GRACE_MISSES = 2
 local PROXIMITY_THRESHOLD = 40
 
-local entries = {}     -- [instance] = { Box, Text, category }
-local missCount = {}   -- [instance] = consecutive scans without a match
-local matchedNow = {}  -- rebuilt on every scan
-local containers = {}  -- [container instance] = category, refreshed slowly
-local lastScan = 0
-local lastContainerScan = 0
+local PROFILE_GRENADE = "grenade"
+local PROFILE_C4 = "c4"
 
--- exact name match only. Substring matching was what made dropped rifles and
--- unrelated props register as grenades.
--- needs to sit above matchCategory so the reference is a real upvalue and not
--- the global slot, which would be nil at runtime
-local function resolveProfile(category)
-    return PROFILES[category] or PROFILES.grenade
+local entries = {}     -- [instance] = { Box, Text, category }
+local missCount = {}
+local matchedNow = {}
+local lastScan = 0
+
+local diagnosticsLogged = 0
+local lastSignature = nil
+
+local function profileColor(category)
+    return (category == PROFILE_C4) and Color3.fromRGB(255, 70, 70) or Color3.fromRGB(255, 190, 70)
 end
 
-local function matchCategory(name)
-    local lower = type(name) == "string" and name:lower() or ""
+local function profileEnabled(category)
+    if not storedConfig then return false end
 
-    if lower:sub(1, #CLOUD_PREFIX) == CLOUD_PREFIX then
-        return "grenade"
+    if category == PROFILE_C4 then
+        return storedConfig.C4_ESP_ENABLED == true
     end
 
-    local order = { "c4", "grenade" }
+    return storedConfig.GRENADE_ESP_ENABLED == true
+end
+
+local function namesFor(category)
+    if category == PROFILE_C4 then return C4_NAMES end
+
+    if storedConfig and type(storedConfig.GRENADE_NAMES) == "table"
+        and #storedConfig.GRENADE_NAMES > 0 then
+        return storedConfig.GRENADE_NAMES
+    end
+
+    return GRENADE_NAMES
+end
+
+local function isCloud(name)
+    local lower = type(name) == "string" and name:lower() or ""
+    return lower:sub(1, #CLOUD_PREFIX) == CLOUD_PREFIX
+end
+
+-- "c4" is checked first so a name matching both profiles cannot flicker
+local function categoryFor(name)
+    local lower = type(name) == "string" and name:lower() or ""
+
+    if isCloud(name) then
+        return PROFILE_GRENADE
+    end
+
+    local order = { PROFILE_C4, PROFILE_GRENADE }
 
     for _, category in ipairs(order) do
-        for _, candidate in ipairs(resolveProfile(category).names) do
-            if lower == candidate then
+        for _, candidate in ipairs(namesFor(category)) do
+            if lower == tostring(candidate):lower() then
                 return category
             end
         end
     end
 
     return nil
-end
-
-local function isCloudName(name)
-    local lower = type(name) == "string" and name:lower() or ""
-    return lower:sub(1, #CLOUD_PREFIX) == CLOUD_PREFIX
-end
-
-local function isContainerName(name)
-    local lower = type(name) == "string" and name:lower() or ""
-
-    for _, hint in ipairs(CONTAINER_HINTS) do
-        if lower:find(hint, 1, true) then return true end
-    end
-
-    return false
-end
-
-local function containerCategory(containerName)
-    local lower = type(containerName) == "string" and containerName:lower() or ""
-
-    if lower:sub(1, #CLOUD_PREFIX) == CLOUD_PREFIX then
-        return "grenade"
-    end
-
-    if lower:find("c4", 1, true) then
-        return "c4"
-    end
-
-    return "grenade"
 end
 
 local function getWorldPosition(inst)
@@ -131,128 +122,62 @@ local function withinRange(position)
     return (position - camera.CFrame.Position).Magnitude <= limit
 end
 
--- if a name matches both profiles, "c4" has to win or the marker would flicker
-local function categorize(childName, fallback)
-    local category = matchCategory(childName)
-    return category or fallback
-end
+-- folders and models only; map geometry is made of parts, so this stays cheap
+local function scanForObjects()
+    matchedNow = {}
 
--- walk a container's contents and mark every object that belongs to its profile
-local function collectFrom(container, containerCategory, depth)
-    -- the smoke cloud is a folder with no position of its own, so the folder
-    -- itself is the marker and its first base part supplies the coordinates
-    if isCloudName(container.Name) then
-        local position = getWorldPosition(container)
-        if position and withinRange(position) then
-            matchedNow = matchedNow or {}
-            matchedNow[container] = "grenade"
-        end
-        return
-    end
+    -- remaining is the number of levels left to descend; each level's children
+    -- are name checked before deciding whether to go deeper
+    local function walk(inst, remaining)
+        if (not inst) or remaining <= 0 then return end
 
-    for _, child in ipairs(container:GetChildren()) do
-        if child:IsA("BasePart") or child:IsA("Model") then
-            local position = getWorldPosition(child)
+        for _, child in ipairs(inst:GetChildren()) do
+            local category = categoryFor(child.Name)
 
-            if position and withinRange(position) then
-                local category = categorize(child.Name, containerCategory)
-                if not matchedNow then matchedNow = {} end
-                matchedNow[child] = category
-            end
-        end
+            if category then
+                local position = getWorldPosition(child)
 
-        -- one extra level so a model (like the C4 "Weapon" rig) exposes its parts
-        if depth < 2 then
-            collectFrom(child, containerCategory, depth + 1)
-        end
-    end
-end
+                if position and withinRange(position) then
+                    matchedNow[child] = category
 
--- The dump shows the containers always live in fixed spots, so the scan only
--- looks there instead of walking the whole map:
---   Workspace.Assets.GrenadeParticles   (thrown grenades)
---   Workspace.Debris.VoxelSmoke_<id>    (smoke clouds - note: Debris, not Assets)
---   Workspace.Assets.Weapons.C4         (the bomb)
-local ROOT_NAMES = { "Assets", "Debris" }
-
--- lookup of the container folders, refreshed on a slow timer
-local function findContainers()
-    local found = {}
-
-    for _, rootName in ipairs(ROOT_NAMES) do
-        local root = Workspace:FindFirstChild(rootName)
-        if not root then root = game:FindFirstChild(rootName) end
-
-        if root then
-            for _, child in ipairs(root:GetChildren()) do
-                if isContainerName(child.Name) then
-                    found[child] = containerCategory(child.Name)
-                elseif child:IsA("Folder") or child:IsA("Model") then
-                    -- one more level, this is where Assets.Weapons.C4 sits
-                    for _, grand in ipairs(child:GetChildren()) do
-                        if isContainerName(grand.Name) then
-                            found[grand] = containerCategory(grand.Name)
-                        end
+                    -- the cloud holds dozens of voxel parts, none of which are
+                    -- grenades, so its subtree is skipped entirely
+                    if not isCloud(child.Name) then
+                        walk(child, remaining - 1)
                     end
                 end
+            elseif child:IsA("Folder") or child:IsA("Model") then
+                walk(child, remaining - 1)
             end
         end
     end
 
-    return found
-end
+    for _, rootSpec in ipairs(SEARCH_ROOTS) do
+        local root = (rootSpec.name == "Workspace") and Workspace or Workspace:FindFirstChild(rootSpec.name)
+        if not root then root = game:FindFirstChild(rootSpec.name) end
 
-local function scanForObjects()
-    local now = os.clock()
-
-    if (now - lastContainerScan) >= CONTAINER_SCAN_INTERVAL then
-        lastContainerScan = now
-        containers = findContainers()
-    end
-
-    matchedNow = nil
-
-    for container, category in pairs(containers) do
-        if container and container.Parent ~= nil then
-            collectFrom(container, category, 0)
+        if root then
+            walk(root, rootSpec.depth)
         end
     end
 
-    return matchedNow or {}
+    return matchedNow
 end
 
--- nested matches collapse to the outermost instance, and markers that sit right
--- on top of each other collapse too, so one smoke is always a single drawing
+-- markers that sit on top of each other are collapsed, so one smoke is always
+-- drawn once even though both the grenade and its cloud are present
 local function collapseMatches(matched)
-    local outermost = {}
-    for inst, category in pairs(matched) do
-        local parent = inst.Parent
-        local nested = false
-
-        while parent and parent ~= Workspace do
-            if matched[parent] then
-                nested = true
-                break
-            end
-            parent = parent.Parent
-        end
-
-        if not nested then
-            outermost[inst] = category
-        end
-    end
-
     local keep = {}
     local taken = {}
 
-    for inst, category in pairs(outermost) do
+    for inst, category in pairs(matched) do
         if not taken[inst] then
             keep[inst] = category
             taken[inst] = true
 
             local position = getWorldPosition(inst)
 
-            for other, otherCategory in pairs(outermost) do
+            for other, otherCategory in pairs(matched) do
                 if (not taken[other]) and (otherCategory == category) then
                     local otherPosition = getWorldPosition(other)
 
@@ -321,8 +246,7 @@ local function updateDrawings()
         if (not inst) or inst.Parent == nil then
             releaseDrawings(inst)
         else
-            local profile = resolveProfile(set.category)
-            local enabled = storedConfig and storedConfig[profile.configKey] == true
+            local enabled = profileEnabled(set.category)
             local projected = nil
 
             if enabled then
@@ -338,7 +262,7 @@ local function updateDrawings()
 
             if projected then
                 local size = 26
-                local color = profile.color
+                local color = profileColor(set.category)
 
                 pcall(function()
                     set.Box.Position = Vector2.new(projected.X - (size / 2), projected.Y - (size / 2))
@@ -361,7 +285,7 @@ local function updateDrawings()
     end
 end
 
--- one missed scan is tolerated, so a brief reparenting cannot cause flicker
+-- a single missed scan is tolerated so brief reparenting cannot cause flicker
 local function pruneUnmatched(seen)
     for inst in pairs(entries) do
         if seen[inst] then
@@ -377,6 +301,30 @@ local function pruneUnmatched(seen)
     end
 end
 
+local function reportMatches(matched)
+    local names = {}
+
+    for inst, category in pairs(matched) do
+        table.insert(names, inst.Name .. "[" .. category .. "]")
+    end
+    table.sort(names)
+
+    local signature = table.concat(names, " | ")
+
+    if signature ~= lastSignature then
+        lastSignature = signature
+        diagnosticsLogged = diagnosticsLogged + 1
+
+        if diagnosticsLogged <= 4 then
+            if signature == "" then
+                pcall(warn, "[Bloxstrike] grenade esp: nothing matched")
+            else
+                pcall(warn, "[Bloxstrike] grenade esp matches: " .. signature)
+            end
+        end
+    end
+end
+
 function GrenadeESP.init(Config)
     if GrenadeESP.Initialized then return end
     GrenadeESP.Initialized = true
@@ -385,6 +333,8 @@ function GrenadeESP.init(Config)
     lastScan = 0
 
     GrenadeESP.Connection = RunService.RenderStepped:Connect(function()
+        -- scanning is throttled, but the drawings themselves are refreshed every
+        -- frame so the markers do not stutter
         pcall(function()
             local now = os.clock()
 
@@ -392,15 +342,16 @@ function GrenadeESP.init(Config)
                 lastScan = now
 
                 local seen = collapseMatches(scanForObjects())
+                reportMatches(seen)
                 pruneUnmatched(seen)
 
                 for inst, category in pairs(seen) do
                     ensureDrawings(inst, category)
                 end
             end
-
-            updateDrawings()
         end)
+
+        pcall(updateDrawings)
     end)
 end
 
@@ -417,9 +368,9 @@ function GrenadeESP.cleanup()
     entries = {}
     missCount = {}
     matchedNow = {}
-    containers = {}
     lastScan = 0
-    lastContainerScan = 0
+    diagnosticsLogged = 0
+    lastSignature = nil
     storedConfig = nil
     GrenadeESP.Initialized = false
 end
