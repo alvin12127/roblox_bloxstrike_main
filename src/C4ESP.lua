@@ -902,6 +902,7 @@ end
 -- are MODELS, so the folder-only walk used everywhere else stops before reaching
 -- it. A search that only descends into Folders cannot find this at all.
 local siteZones = nil
+local siteBoxes = nil
 local siteSearch = { found = 0, nodes = 0, budget = 400 }
 
 -- Locate the "Sites" folder. The known path is tried first because it costs
@@ -986,36 +987,73 @@ local function buildSiteZones()
     return siteZones
 end
 
--- Proximity, not containment. The @Site parts are ZonePlus trigger volumes: they
--- mark where a site is, but a planted bomb rests on the floor beside them rather
--- than inside one, so a strict AABB test reported site=nil for a bomb that was
--- demonstrably on site.
-local SITE_RADIUS = 60
+-- Bomb site boxes.
+--
+-- The @Site parts are ZonePlus trigger volumes scattered around where a site is,
+-- so testing each part individually with a fixed radius is unreliable: a bomb
+-- planted on the floor of a site is not within a few studs of any single
+-- trigger. The parts sharing a site letter are therefore unioned into one box
+-- and padded, which covers the site volume itself.
+--
+-- This is also the only signal that can mean "planted" by itself, because the
+-- bomb cannot be planted anywhere else. The Screen text does NOT qualify:
+-- measured in game it reads a number both when the bomb is planted and when it
+-- is merely lying on the floor, so using it as a signal reported every drop as a
+-- plant.
+local SITE_PAD = 45
 
+local function buildSiteBoxes()
+    if siteBoxes then return siteBoxes end
+    siteBoxes = {}
+
+    for _, z in ipairs(buildSiteZones()) do
+        local box = siteBoxes[z.site]
+        if not box then
+            box = {
+                site = z.site,
+                minX = math.huge, minY = math.huge, minZ = math.huge,
+                maxX = -math.huge, maxY = -math.huge, maxZ = -math.huge,
+            }
+            siteBoxes[z.site] = box
+        end
+
+        local sx, sy, sz = 0, 0, 0
+        if z.size then sx, sy, sz = z.size.X, z.size.Y, z.size.Z end
+        local hx, hy, hz = sx / 2, sy / 2, sz / 2
+
+        if z.pos.X - hx < box.minX then box.minX = z.pos.X - hx end
+        if z.pos.Y - hy < box.minY then box.minY = z.pos.Y - hy end
+        if z.pos.Z - hz < box.minZ then box.minZ = z.pos.Z - hz end
+        if z.pos.X + hx > box.maxX then box.maxX = z.pos.X + hx end
+        if z.pos.Y + hy > box.maxY then box.maxY = z.pos.Y + hy end
+        if z.pos.Z + hz > box.maxZ then box.maxZ = z.pos.Z + hz end
+    end
+
+    return siteBoxes
+end
+
+-- Returns the site letter the bomb is inside, or nil.
 local function insideBombSite(position)
     if not position then return nil end
 
-    for _, z in ipairs(buildSiteZones()) do
-        local dx = position.X - z.pos.X
-        local dy = position.Y - z.pos.Y
-        local dz = position.Z - z.pos.Z
-        local distSq = (dx * dx) + (dy * dy) + (dz * dz)
-
-        local reach = SITE_RADIUS
-        if z.size then
-            -- A large zone part is itself the volume, so honour its extent.
-            local r = math.max(z.size.X, z.size.Y, z.size.Z) * 0.5
-            if r > reach then reach = r end
-        end
-
-        if distSq <= (reach * reach) then
-            return z.site
+    for _, box in pairs(buildSiteBoxes()) do
+        local p = SITE_PAD
+        if position.X >= box.minX - p and position.X <= box.maxX + p
+            and position.Y >= box.minY - p and position.Y <= box.maxY + p
+            and position.Z >= box.minZ - p and position.Z <= box.maxZ + p then
+            return box.site
         end
     end
     return nil
 end
 
--- Returns: planted, timerSeconds, siteNameOrNil
+-- Returns: planted, timerSeconds, siteNameOrNil, signalName
+--
+-- `signalName` is reported in the readout so a planted=true can always be
+-- attributed to the signal that produced it. That distinction mattered: the
+-- Screen text was originally treated as proof of a plant, and because it reads a
+-- number whether or not the bomb is planted, every drop on the floor was
+-- reported as a plant for several rounds with no way to see why.
 local function plantedInfo(bombInstance, position)
     -- No bomb at all: after a grace period the round is over and any latch is
     -- stale. The grace period matters because a plant briefly destroys the old
@@ -1026,34 +1064,41 @@ local function plantedInfo(bombInstance, position)
         elseif (os.clock() - plantedState.missingSince) > ROUND_RESET_GRACE then
             releasePlanted()
         end
-        return false, 0, nil
+        return false, 0, nil, "none"
     end
 
     installPlantedHook()
     plantedState.missingSince = nil
 
-    -- The Screen text is the strongest live signal, and it carries the timer.
+    -- The Screen supplies the COUNTDOWN, never the decision. It reads a number
+    -- for a dropped bomb too, so it cannot distinguish the two states.
     local screenTimer = readScreenTimer(bombInstance)
     probe.screenTimer = screenTimer
 
-    -- Report how many site zones were located, so "site=nil" can be told apart
-    -- from "the Sites folder was never found".
     local zones = buildSiteZones()
     probe.zoneCount = zones and #zones or 0
 
-    local site = nil
-    if (not plantedState.latched) and (not screenTimer) then
-        site = insideBombSite(position)
+    -- Decision, in order of confidence:
+    --   1. the C4 remote fired          exact
+    --   2. the bomb is inside a site    inferred, but a plant is only possible
+    --                                    inside a site, so this cannot be a
+    --                                    false negative for a real plant
+    local site = insideBombSite(position)
+
+    local signal = "none"
+    if plantedState.latched then
+        signal = "remote"
+    elseif site then
+        signal = "site"
     end
 
-    local planted = plantedState.latched or (screenTimer ~= nil) or (site ~= nil)
-    if not planted then return false, 0, nil end
+    if signal == "none" then
+        return false, 0, nil, signal
+    end
 
+    -- Timer: the Screen first, then a countdown from the latch moment.
     local timer = screenTimer or 0
-
-    -- No text to read (model replaced, or the Screen was not reachable): fall
-    -- back to counting down from the moment the plant was latched.
-    if (not timer) or (timer <= 0) then
+    if timer <= 0 then
         if plantedState.latchedAt then
             timer = math.max(0, DEFAULT_BOMB_TIME - (os.clock() - plantedState.latchedAt))
         else
@@ -1061,7 +1106,7 @@ local function plantedInfo(bombInstance, position)
         end
     end
 
-    return true, timer, site
+    return true, timer, site, signal
 end
 
 -- Somebody picked the bomb back up, so any plant latch has to go.
@@ -1400,7 +1445,7 @@ local function update()
         hideItem("Carrier")
     end
 
-    local planted, timer, plantedSite = plantedInfo(worldBomb, resolvePosition(worldBomb, 0))
+    local planted, timer, plantedSite, plantSignal = plantedInfo(worldBomb, resolvePosition(worldBomb, 0))
 
     -- On-screen debug readout (top-left, yellow) so the state is visible even
     -- when every console is blocked.
@@ -1432,11 +1477,12 @@ local function update()
                 end
             end
             debugText.Text = string.format(
-                "C4 carrier=%s bomb=%s\nvia=%s planted=%s site=%s\natt=%d hol=%d own=%s zones=%d\nscore=%d rig=%d alive=%d pl=%d stick=%d scr=%s\nstatus=%s",
+                "C4 carrier=%s bomb=%s\nvia=%s planted=%s sig=%s site=%s\natt=%d hol=%d own=%s zones=%d\nscore=%d rig=%d alive=%d pl=%d stick=%d scr=%s\nstatus=%s",
                 tostring(carrierName) or "nil",
                 tostring(worldBomb and worldBomb.Name) or "nil",
                 tostring(cache.bombSource) or "none",
                 tostring(planted),
+                tostring(plantSignal) or "none",
                 tostring(plantedSite) or "-",
                 probe.attachmentFolders,
                 probe.holstersInFolders,
