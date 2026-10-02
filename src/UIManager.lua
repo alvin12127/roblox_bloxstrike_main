@@ -911,12 +911,16 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
     local PANEL_HEIGHT = 420
     local skinsState = { holder = nil, built = false }
 
+    -- Catalogs are built lazily, so refresh must tolerate one that has not been
+    -- built yet: refresh() would otherwise call renderSkinCards on nil frames.
     local function refreshSkins()
         local sc = SkinChanger and SkinChanger.API
         if sc and sc.refresh then pcall(sc.refresh) end
         for _, entry in ipairs(SC_CATALOGS) do
             local catalog = SkinChanger and SkinChanger[entry.key]
-            if catalog and catalog.refresh then pcall(catalog.refresh) end
+            if catalog and catalog.refresh and catalog.Initialized then
+                pcall(catalog.refresh)
+            end
         end
     end
 
@@ -961,6 +965,65 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
 
         local navButtons = {}
         local panels = {}
+        local built = {}
+
+        -- Build one catalog on demand.
+        --
+        -- arvn builds EVERY page inside CreateWindow, so building all three
+        -- catalogs up front created ~47 ViewportFrames (each with a cloned 3D
+        -- model and a RenderStepped turntable connection) during load. That is
+        -- enough to stall or crash the client, so only the requested catalog is
+        -- ever built and the rest wait for their tab button.
+        local function buildCatalog(index)
+            if built[index] then return end
+
+            local entry = SC_CATALOGS[index]
+            local catalog = SkinChanger and SkinChanger[entry.key]
+            local panel = panels[index]
+            if not panel then return end
+
+            -- A previous arvn rebuild may have destroyed the panel between the
+            -- deferred call and now. Never build into a detached frame.
+            if not panel.Parent then return end
+
+            if (not catalog) or (type(catalog.init) ~= "function") then
+                SkinShim:CreateLabel({
+                    Size = UDim2.new(1, 0, 0, 24),
+                    Text = entry.label .. " catalog unavailable.",
+                    TextColor3 = Color3.fromRGB(255, 90, 90),
+                    TextSize = 13,
+                    Parent = panel
+                })
+                built[index] = true
+                return
+            end
+
+            -- Drop the 3D viewport connections from any previous build first
+            if type(catalog.cleanup) == "function" then pcall(catalog.cleanup) end
+            catalog.Initialized = false
+            catalog.CurrentView = "Models"
+
+            local fakeTab = {
+                TabFrame = panel,
+                LeftSide = nil,
+                RightSide = nil
+            }
+
+            local ok, err = pcall(catalog.init, fakeTab, scConfig, scAPI, SkinShim, scDb)
+            if ok then
+                built[index] = true
+            else
+                warn("[Bloxstrike] " .. entry.key .. " failed to build: " .. tostring(err))
+                SkinShim:CreateLabel({
+                    Size = UDim2.new(1, 0, 0, 40),
+                    Text = entry.label .. " failed to build:\n" .. tostring(err),
+                    TextColor3 = Color3.fromRGB(255, 90, 90),
+                    TextSize = 12,
+                    TextWrapped = true,
+                    Parent = panel
+                })
+            end
+        end
 
         for index, entry in ipairs(SC_CATALOGS) do
             local button = SkinShim:Create("TextButton", {
@@ -1001,6 +1064,13 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
                             (i == index) and SkinShim.AccentColor or SkinShim.MainColor
                     end
                 end
+
+                -- Build lazily, one frame later so the tab switch is not blocked
+                -- by creating dozens of viewports inside the click handler.
+                task.defer(function()
+                    if not panels[index] or not panels[index].Parent then return end
+                    buildCatalog(index)
+                end)
             end)
         end
 
@@ -1058,36 +1128,13 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
             end)
         end
 
-        -- ---------- the actual catalogs ----------
-        for index, entry in ipairs(SC_CATALOGS) do
-            local catalog = SkinChanger and SkinChanger[entry.key]
-
-            if catalog and type(catalog.init) == "function" then
-                -- Drop the 3D viewport connections from the previous build first
-                if type(catalog.cleanup) == "function" then pcall(catalog.cleanup) end
-                catalog.Initialized = false
-                catalog.CurrentView = "Models"
-
-                local fakeTab = {
-                    TabFrame = panels[index],
-                    LeftSide = nil,
-                    RightSide = nil
-                }
-
-                local ok, err = pcall(catalog.init, fakeTab, scConfig, scAPI, SkinShim, scDb)
-                if not ok then
-                    warn("[Bloxstrike] " .. entry.key .. " failed to build: " .. tostring(err))
-                end
-            else
-                SkinShim:CreateLabel({
-                    Size = UDim2.new(1, 0, 0, 24),
-                    Text = entry.label .. " catalog unavailable.",
-                    TextColor3 = Color3.fromRGB(255, 90, 90),
-                    TextSize = 13,
-                    Parent = panels[index]
-                })
+        -- Only the first tab is built up front. The other two wait for their nav
+        -- button, so a load never creates more than one catalog's viewports.
+        task.defer(function()
+            if panels[1] and panels[1].Parent then
+                buildCatalog(1)
             end
-        end
+        end)
     end
 
     -- CustomPage gives a full-bleed holder inside the tab. Fall back to a tall
