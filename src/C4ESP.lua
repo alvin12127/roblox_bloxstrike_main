@@ -106,6 +106,12 @@ local function makeItem(key)
         return nil
     end
 
+    -- The off-screen bearing marker. Optional: an executor without
+    -- Drawing.new("Triangle") still gets a working on-screen marker, so failure
+    -- here must not abort makeItem.
+    local okArrow, arrow = pcall(function() return Drawing.new("Triangle") end)
+    if (not okArrow) or (not arrow) then arrow = nil end
+
     pcall(function()
         box.Thickness = 1.5
         box.Filled = false
@@ -119,7 +125,18 @@ local function makeItem(key)
         label.ZIndex = 3
     end)
 
-    item = { Box = box, Label = label }
+    if arrow then
+        pcall(function()
+            arrow.Filled = true
+            arrow.Transparency = 0.15
+            arrow.Thickness = 2
+            arrow.Outline = true
+            arrow.Visible = false
+            arrow.ZIndex = 50
+        end)
+    end
+
+    item = { Box = box, Label = label, Arrow = arrow }
     C4ESP.Items[key] = item
 
     return item
@@ -130,6 +147,9 @@ local function hideItem(key)
     if not item then return end
     pcall(function() item.Box.Visible = false end)
     pcall(function() item.Label.Visible = false end)
+    if item.Arrow then
+        pcall(function() item.Arrow.Visible = false end)
+    end
 end
 
 local function hideAll()
@@ -276,25 +296,56 @@ local function findHolsterUnder(node, maxDepth)
 end
 
 -- The C4 is a single "BombHolster" Model. From an instance dump of the live
--- game the real hierarchy is:
+-- game the real layout is:
 --
---   Characters                                     (Folder)
---     Terrorists / Counter-Terrorists / Hostages    (Folders, per team)
---       <Player>                                   (Model, the character)
---     <Player>_WeaponAttachments                   (Folder, PersistentDebris)
---       <Player>_Weapon                            (Model)
---         T Knife                                  (Model)
---           Interactables                          (Folder)
---             BombHolster                          (Model, PP "Body")
+--   Characters                                  (Folder)
+--     <Player>                                   (Model - the character)
+--       @CharacterName / @Dead / @Health        (attributes)
+--       WeaponAttachments                       (Folder, inside the character)
+--     <Player>_WeaponAttachments                (Folder, SIBLING of the models)
+--       <Player>_Weapon                         (Model)
+--         T Knife                               (Model)
+--           Interactables                       (Folder)
+--             BombHolster                       (Model, PP "Body")
 --
--- The critical detail: <Player>_WeaponAttachments is a SIBLING of the character
--- models, sitting directly under Characters - it is NOT a child of the player
--- model. An earlier version searched character:GetChildren() for it, which can
--- never find it, so the carrier was never resolved and the bomb was reported as
--- "Dropped" even while somebody was carrying it.
+-- Two details matter, and both were wrong in earlier versions:
+--
+--   1. EVERY character owns a "WeaponAttachments" folder, but only the carrier
+--      gets an extra "<Player>_WeaponAttachments" sibling that actually holds the
+--      BombHolster. So the folder's mere existence means nothing - what matters
+--      is whether a BombHolster is inside it.
+--
+--   2. <Player>_WeaponAttachments is a SIBLING of the character models, not a
+--      child of one. An earlier version searched character:GetChildren() for
+--      it, which can never find it, so the carrier was never resolved and the
+--      bomb was reported as "Dropped" while somebody was carrying it.
 --
 -- Because the attachment folder is named after its owner, the carrier is derived
--- from that name instead of from instance parentage.
+-- from that name rather than from instance parentage.
+
+-- Liveness. The rigs expose @Dead / @Health attributes; there is no Humanoid on
+-- a character model at all, so the attribute is the only reliable signal (the
+-- Humanoid fallback below is kept for rigs from a future build that add one).
+-- A corpse keeps its attachment folder, so without this the ESP kept reporting a
+-- dead body as the carrier and the real bomb on the floor was never shown.
+local function isAlive(char)
+    local dead, health = nil, nil
+    pcall(function() dead = char:GetAttribute("Dead") end)
+    pcall(function() health = tonumber(char:GetAttribute("Health")) end)
+
+    if dead == true then return false end
+    if dead == false then return true end
+    if health and health <= 0 then return false end
+
+    local hum = nil
+    pcall(function() hum = char:FindFirstChildOfClass("Humanoid") end)
+    if hum then
+        local ok, h = pcall(function() return hum.Health end)
+        if ok and type(h) == "number" then return h > 0 end
+    end
+
+    return true
+end
 
 local function ownerNameFromAttachment(name)
     if type(name) ~= "string" then return nil end
@@ -304,6 +355,27 @@ local function ownerNameFromAttachment(name)
 end
 
 -- Every character model in the game, including the ones nested in team folders.
+-- A player rig in this game is a Model with an @CharacterName attribute and
+-- @Dead / @Health attributes. It does NOT contain a Humanoid - the dump shows
+-- zero [Humanoid] instances under Characters, only custom rigs (IDF,
+-- Anarchist, ...) built from BaseParts and an Animator. An earlier version
+-- identified characters by FindFirstChildOfClass("Humanoid"), which therefore
+-- matched nothing: the character map came back empty and the carrier was never
+-- resolved, so a carried bomb was always labelled "Dropped".
+local function isCharacterModel(inst)
+    if not inst or (not inst:IsA("Model")) then return false end
+
+    local charName = nil
+    pcall(function() charName = inst:GetAttribute("CharacterName") end)
+    if type(charName) == "string" and charName ~= "" then return true end
+
+    -- Fallback for a rig that lacks the attribute: having a HumanoidRootPart is
+    -- enough, because nothing else under Characters is a Model with one.
+    local hasRoot = false
+    pcall(function() hasRoot = inst:FindFirstChild("HumanoidRootPart") ~= nil end)
+    return hasRoot
+end
+
 local function eachCharacter(fn)
     local charsFolder = Workspace:FindFirstChild("Characters")
     if not charsFolder then return end
@@ -316,10 +388,7 @@ local function eachCharacter(fn)
             for _, child in ipairs(node:GetChildren()) do
                 if not seen[child] then
                     seen[child] = true
-                    -- a character model is identified by having a Humanoid
-                    local hum = nil
-                    pcall(function() hum = child:FindFirstChildOfClass("Humanoid") end)
-                    if child:IsA("Model") and hum then
+                    if isCharacterModel(child) then
                         fn(child)
                     else
                         consider(child, depth + 1)
@@ -332,13 +401,13 @@ local function eachCharacter(fn)
     consider(charsFolder, 0)
 end
 
--- Live character models keyed by lowercased name.
+-- Live character models keyed by lowercased name. Dead rigs are excluded: a
+-- corpse keeps its <Name>_WeaponAttachments folder, so without this the ESP
+-- kept naming a dead body as the carrier and never showed the bomb on the floor.
 local function buildCharacterMap()
     local map = {}
     eachCharacter(function(char)
-        local hum = nil
-        pcall(function() hum = char:FindFirstChildOfClass("Humanoid") end)
-        if (not hum) or (hum.Health > 0) then
+        if isAlive(char) then
             map[tostring(char.Name):lower()] = char
         end
     end)
@@ -348,6 +417,11 @@ end
 -- Resolve the bomb and, if it is being carried, by whom.
 --
 -- Returns: holster, holderName, holderCharacter
+--
+-- holderName is only returned when the bomb is genuinely being carried RIGHT
+-- NOW. A corpse keeps its "<Name>_WeaponAttachments" folder, so the folder name
+-- alone is not proof of carriage: if the named owner is dead (or has no rig in
+-- the scene any more) the bomb has been dropped and is reported as loose.
 local function scanForBomb()
     local charsFolder = Workspace:FindFirstChild("Characters")
     local chars = buildCharacterMap()
@@ -355,39 +429,60 @@ local function scanForBomb()
     -- 1. A BombHolster inside a <Name>_WeaponAttachments folder anywhere under
     --    Characters. Those folders are siblings of the character models, so the
     --    whole Characters subtree is walked instead of a single level.
+    --
+    --    Every rig also has a plain "WeaponAttachments" folder inside it, and
+    --    those never hold the bomb, so only the "<Name>_" prefixed folders can
+    --    yield a hit. Candidates are collected and the best one wins, because
+    --    GetDescendants order is arbitrary and a leftover folder must not beat
+    --    the actual carrier.
     if charsFolder then
-        local foundHolster, foundOwner, foundChar
+        local bestHolster, bestOwner, bestChar, bestScore
+
         pcall(function()
             for _, d in ipairs(charsFolder:GetDescendants()) do
-                if (not foundHolster) and d:IsA("Folder")
-                    and isWeaponAttachmentsName(d.Name) then
-                    local holster = findHolsterUnder(d)
-                    if holster then
-                        foundHolster = holster
-                        foundOwner = ownerNameFromAttachment(d.Name)
-                        foundChar = foundOwner and chars[foundOwner:lower()] or nil
+                if d:IsA("Folder") and isWeaponAttachmentsName(d.Name) then
+                    local owner = ownerNameFromAttachment(d.Name)
+                    if owner then
+                        local holster = findHolsterUnder(d)
+                        if holster then
+                            local char = chars[owner:lower()]
+                            -- Score: a live owner holding it beats everything.
+                            local score = chars[owner:lower()] and 2 or 1
+                            if (not bestScore) or (score > bestScore) then
+                                bestScore = score
+                                bestHolster = holster
+                                bestOwner = owner
+                                bestChar = char
+                            end
+                        end
                     end
                 end
             end
         end)
-        if foundHolster then
-            return foundHolster, foundOwner, foundChar
+
+        -- The owner must still be alive for this to count as "carried".
+        if bestHolster and chars[bestOwner:lower()] then
+            return bestHolster, bestOwner, bestChar
         end
+
+        -- The bomb is in an attachment folder but its owner is gone or dead:
+        -- it was dropped on death. Fall through so it is treated as loose.
     end
 
-    -- 2. A bomb welded directly to a character (some builds place it this way).
+    -- 2. A bomb welded directly to a living character (some builds place it
+    --    this way, inside the rig's own WeaponAttachments folder).
     local welded = nil
     local weldedName = nil
     local weldedChar = nil
     eachCharacter(function(char)
-        if not welded then
-            local holster = nil
-            pcall(function() holster = findHolsterUnder(char) end)
-            if holster then
-                welded = holster
-                weldedName = tostring(char.Name)
-                weldedChar = char
-            end
+        if welded then return end
+        if not isAlive(char) then return end
+        local holster = nil
+        pcall(function() holster = findHolsterUnder(char) end)
+        if holster then
+            welded = holster
+            weldedName = tostring(char.Name)
+            weldedChar = char
         end
     end)
     if welded then
@@ -426,42 +521,121 @@ local function scanForBomb()
     return best, nil, nil
 end
 
--- Bomb state. The dump shows the game drives this through Remotes rather than
--- player attributes, so several sources are checked.
-local function bombAttributes()
-    local planted = false
-    local timer = 0
+-- ==========================================================
+-- Planted state
+-- ==========================================================
+-- An instance dump of a live round shows there are NO bomb attributes anywhere:
+-- no @BombPlanted and no @BombTimer. The game reports the plant through a
+-- RemoteEvent instead ("Planted", sitting next to BombSiteEntered /
+-- BombSiteExited in NetworkRemotes). The previous version polled attributes that
+-- do not exist, so "Planted" could never be shown.
+--
+-- The remote is watched directly and the result is LATCHED: the game fires
+-- "Planted" once, so a bare event flag would be gone by the next frame. The
+-- latch is released as soon as the bomb is carried again (picked back up) or
+-- when the bomb instance goes missing for a whole scan interval (round over).
+local plantedState = {
+    latched = false,
+    latchedAt = nil,
+    hookInstalled = false,
+    lastSeenBomb = nil,
+    missingSince = nil,
+}
 
-    -- player attributes
-    pcall(function()
-        if LocalPlayer:GetAttribute("BombPlanted") == true then planted = true end
-        timer = tonumber(LocalPlayer:GetAttribute("BombTimer")) or 0
-    end)
-    if planted then return true, timer end
+local function releasePlanted()
+    plantedState.latched = false
+    plantedState.latchedAt = nil
+    plantedState.lastSeenBomb = nil
+    plantedState.missingSince = nil
+end
 
-    -- character attributes
+local function installPlantedHook()
+    if plantedState.hookInstalled then return end
+
     pcall(function()
-        local char = LocalPlayer.Character
-        if char then
-            if char:GetAttribute("BombPlanted") == true then planted = true end
-            timer = tonumber(char:GetAttribute("BombTimer")) or timer
+        local roots = {
+            ReplicatedStorage:FindFirstChild("NetworkRemotes"),
+            ReplicatedStorage:FindFirstChild("Remotes"),
+            ReplicatedStorage,
+        }
+        for _, root in ipairs(roots) do
+            if root then
+                local ev = nil
+                pcall(function() ev = root:FindFirstChild("Planted") end)
+                if (not ev) or (not ev:IsA("RemoteEvent")) then
+                    ev = nil
+                    pcall(function()
+                        for _, d in ipairs(root:GetDescendants()) do
+                            if d.Name == "Planted" and d:IsA("RemoteEvent") then
+                                ev = d
+                                break
+                            end
+                        end
+                    end)
+                end
+                if ev then
+                    ev.OnClientEvent:Connect(function()
+                        plantedState.latched = true
+                        plantedState.latchedAt = os.clock()
+                    end)
+                    plantedState.hookInstalled = true
+                    return
+                end
+            end
         end
     end)
-    if planted then return true, timer end
+end
 
-    -- a value object in ReplicatedStorage holding the countdown
+-- Returns: planted, timerSeconds
+local function plantedInfo(bombInstance)
+    if not bombInstance then
+        releasePlanted()
+        return false, 0
+    end
+
+    installPlantedHook()
+
+    -- A different holster instance means a new round, so an old latch is stale.
+    if plantedState.lastSeenBomb ~= bombInstance then
+        plantedState.latched = false
+        plantedState.latchedAt = nil
+        plantedState.lastSeenBomb = bombInstance
+    end
+    plantedState.missingSince = nil
+
+    -- Attributes, in case a future build exposes them. Cheap and harmless.
+    local attrPlanted = false
+    pcall(function()
+        if LocalPlayer:GetAttribute("BombPlanted") == true then attrPlanted = true end
+    end)
+    pcall(function()
+        local char = LocalPlayer.Character
+        if char and char:GetAttribute("BombPlanted") == true then attrPlanted = true end
+    end)
+
+    local timer = 0
+    pcall(function() timer = tonumber(LocalPlayer:GetAttribute("BombTimer")) or 0 end)
     if timer <= 0 then
         pcall(function()
-            local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-            local holder = (remotes and remotes:FindFirstChild("BombTimer"))
-                or ReplicatedStorage:FindFirstChild("BombTimer")
-            if holder and holder.Value ~= nil then
-                timer = tonumber(holder.Value) or 0
-            end
+            local char = LocalPlayer.Character
+            if char then timer = tonumber(char:GetAttribute("BombTimer")) or 0 end
         end)
     end
 
-    return planted, timer
+    local planted = plantedState.latched or attrPlanted
+    if not planted then return false, timer end
+
+    -- No timer value from the game: approximate one from the latch moment.
+    if timer <= 0 and plantedState.latchedAt then
+        timer = math.max(0, 40 - (os.clock() - plantedState.latchedAt))
+    end
+
+    return true, timer
+end
+
+-- Somebody picked the bomb back up, so any plant latch has to go.
+local function clearPlantedOnCarry()
+    if plantedState.latched then releasePlanted() end
 end
 
 -- ==========================================================
@@ -496,6 +670,67 @@ local function drawCarrier(camera, character, color)
     end)
 end
 
+-- Project a world position onto the screen. When the point is off screen, or
+-- behind the camera, the result is where the bearing from the screen centre
+-- crosses a box inset from the edges - so the marker always sits ON the screen
+-- edge pointing at the bomb, and never in the middle of the view.
+--
+-- The previous implementation had two defects:
+--   * it hid the marker entirely whenever Z <= 0, so a bomb behind the player
+--     produced nothing at all;
+--   * for the off-screen case it scaled dx and dy independently onto an inset
+--     box, which slides the marker to the screen centre as soon as one axis
+--     dominates. That is exactly the "floating in empty space" marker.
+local function edgeMarker(screenX, screenY, behind, viewport)
+    local cx = viewport.X / 2
+    local cy = viewport.Y / 2
+
+    local dx = screenX - cx
+    local dy = screenY - cy
+
+    -- WorldToViewportPoint mirrors the projection for points behind the camera,
+    -- so the true bearing is the negation of the projected one.
+    if behind then
+        dx = -dx
+        dy = -dy
+    end
+
+    -- Exactly on the screen centre: any direction is arbitrary, but dx = dy = 0
+    -- would leave the marker dead centre, so aim straight up instead.
+    if (math.abs(dx) < 0.5) and (math.abs(dy) < 0.5) then
+        dx, dy = 0, -1
+    end
+
+    -- Inset so the marker is never clipped by the window border.
+    local inset = 70
+    local maxX = (viewport.X / 2) - inset
+    local maxY = (viewport.Y / 2) - inset
+    if maxX < 10 then maxX = 10 end
+    if maxY < 10 then maxY = 10 end
+
+    -- Intersect the ray with the inset rectangle. Taking the tighter of the two
+    -- ratios lands exactly on the nearer edge instead of overshooting it.
+    local scale = math.huge
+    if math.abs(dx) > 1e-6 then scale = math.min(scale, maxX / math.abs(dx)) end
+    if math.abs(dy) > 1e-6 then scale = math.min(scale, maxY / math.abs(dy)) end
+    if scale == math.huge then scale = 1 end
+
+    local ax = cx + (dx * scale)
+    local ay = cy + (dy * scale)
+
+    -- Hard clamp, so the result is inside the viewport under any input.
+    ax = math.max(inset, math.min(viewport.X - inset, ax))
+    ay = math.max(inset, math.min(viewport.Y - inset, ay))
+
+    -- Unit bearing, used to orient the arrow so the marker clearly points away
+    -- from the player rather than looking like an object hovering in the world.
+    local len = math.sqrt((dx * dx) + (dy * dy))
+    if len < 1e-6 then
+        return ax, ay, 0, -1
+    end
+    return ax, ay, dx / len, dy / len
+end
+
 local function drawWorldBomb(camera, inst, color, label)
     local item = makeItem("World")
     if not item then
@@ -514,9 +749,8 @@ local function drawWorldBomb(camera, inst, color, label)
 
     local okScreen, screen = pcall(camera.WorldToViewportPoint, camera, position)
 
-    if (not okScreen) or (not screen) or (screen.Z <= 0) then
-        stateLog("draw failed - '" .. tostring(inst.Name) .. "' is behind the camera (Z="
-            .. tostring(screen and screen.Z) .. ")")
+    if (not okScreen) or (not screen) then
+        stateLog("draw failed - WorldToViewportPoint errored on '" .. tostring(inst.Name) .. "'")
         hideItem("World")
         return
     end
@@ -529,68 +763,76 @@ local function drawWorldBomb(camera, inst, color, label)
 
     local viewport = camera.ViewportSize
 
-    -- Off screen: clamp a marker onto the screen edge so the bomb can still be
-    -- located. Hiding it entirely made the feature look broken whenever the bomb
-    -- was not directly in front of the player.
-    if (screen.X < 0) or (screen.Y < 0)
+    -- Z is the distance along the camera's forward axis, so a negative Z means
+    -- the bomb is behind the player. That counts as off screen too, otherwise
+    -- turning away from a planted bomb would hide the marker completely.
+    local behind = (screen.Z <= 0)
+
+    if behind or (screen.X < 0) or (screen.Y < 0)
         or (screen.X > viewport.X) or (screen.Y > viewport.Y) then
-        local cx = viewport.X / 2
-        local cy = viewport.Y / 2
-        local dx = screen.X - cx
-        local dy = screen.Y - cy
-
-        -- Inset well away from the very edge so the marker is not clipped by the
-        -- screen border and is not hidden under the debug readout in the corner.
-        local marginX = 90
-        local marginY = 90
-        local halfW = (viewport.X / 2) - marginX
-        local halfH = (viewport.Y / 2) - marginY
-        if halfW < 40 then halfW = 40 end
-        if halfH < 40 then halfH = 40 end
-
-        local scale = math.huge
-        if math.abs(dx) > 0.0001 then scale = math.min(scale, halfW / math.abs(dx)) end
-        if math.abs(dy) > 0.0001 then scale = math.min(scale, halfH / math.abs(dy)) end
-        if scale == math.huge then scale = 1 end
-
-        local ax = cx + (dx * scale)
-        local ay = cy + (dy * scale)
-
-        -- Final hard clamp: scale alone can overshoot when one axis dominates.
-        ax = math.max(marginX * 0.5, math.min(viewport.X - marginX * 0.5, ax))
-        ay = math.max(marginY * 0.5, math.min(viewport.Y - marginY * 0.5, ay))
-
-        local dist = math.floor(screen.Z)
+        local ax, ay, ux, uy = edgeMarker(screen.X, screen.Y, behind, viewport)
+        local dist = math.floor(math.abs(screen.Z))
 
         pcall(function()
-            -- A filled square plus a bigger label: the previous thin outline at
-            -- 1.5px was very easy to miss at the screen edge.
-            item.Box.Position = Vector2.new(ax - 15, ay - 15)
-            item.Box.Size = Vector2.new(30, 30)
-            item.Box.Thickness = 3
-            item.Box.Filled = true
-            item.Box.Transparency = 0.35
-            item.Box.Color = color
-            item.Box.ZIndex = 50
-            item.Box.Visible = true
+            -- A triangle pointing outward along the bearing. A plain square here
+            -- reads as a world object sitting in mid air, which is what made the
+            -- old marker look broken.
+            local reach = 12   -- arrow length
+            local halfWidth = 9
+
+            local tipX = ax + (ux * reach)
+            local tipY = ay + (uy * reach)
+            local backX = ax - (ux * reach)
+            local backY = ay - (uy * reach)
+            local px = -uy
+            local py = ux
+
+            if item.Arrow then
+                item.Arrow.PointA = Vector2.new(backX + (px * halfWidth), backY + (py * halfWidth))
+                item.Arrow.PointB = Vector2.new(tipX, tipY)
+                item.Arrow.PointC = Vector2.new(backX - (px * halfWidth), backY - (py * halfWidth))
+                item.Arrow.Filled = true
+                item.Arrow.Transparency = 0.15
+                item.Arrow.Thickness = 2
+                item.Arrow.Outline = true
+                item.Arrow.Color = color
+                item.Arrow.Visible = true
+                item.Arrow.ZIndex = 50
+            end
+
+            item.Box.Visible = false
+
+            -- Label goes beside the arrow on a side edge, and above it otherwise,
+            -- then gets pulled back inside the viewport so it is never clipped.
+            local lx, ly = ax, ay
+            if math.abs(ux) > math.abs(uy) then
+                lx = ax + (ux * 38)
+            else
+                ly = ay + (uy * 34)
+            end
+            lx = math.max(46, math.min(viewport.X - 46, lx))
+            ly = math.max(14, math.min(viewport.Y - 10, ly))
 
             item.Label.Text = string.format("%s  %dm", tostring(label), dist)
             item.Label.Size = 15
             item.Label.Outline = true
             item.Label.Center = true
-            item.Label.Position = Vector2.new(ax, ay - 30)
-            item.Label.Color = Color3.fromRGB(255, 240, 90)
+            item.Label.Position = Vector2.new(lx, ly)
+            item.Label.Color = color
             item.Label.ZIndex = 51
             item.Label.Visible = true
         end)
 
         stateLog("bomb off screen - edge marker at ("
             .. tostring(math.floor(ax)) .. ", " .. tostring(math.floor(ay))
-            .. ") dist=" .. tostring(dist) .. "m")
+            .. ") dist=" .. tostring(dist) .. "m"
+            .. (behind and " BEHIND" or ""))
         return
     end
 
     local okDraw = pcall(function()
+        if item.Arrow then item.Arrow.Visible = false end
+
         item.Box.Position = Vector2.new(screen.X - (width / 2), screen.Y - (width / 2))
         item.Box.Size = Vector2.new(width, width)
         item.Box.Thickness = 1.5
@@ -602,6 +844,8 @@ local function drawWorldBomb(camera, inst, color, label)
 
         item.Label.Text = label
         item.Label.Size = 13
+        item.Label.Outline = false
+        item.Label.Center = true
         item.Label.Position = Vector2.new(screen.X, screen.Y - (width / 2) - 16)
         item.Label.Color = color
         item.Label.ZIndex = 3
@@ -646,6 +890,10 @@ local function refreshScan()
         cache.worldBomb = holster
         cache.carrierName = ownerName
         cache.carrier = char
+
+        -- Carrying beats planting: if somebody has the bomb in hand it cannot be
+        -- planted, so any plant latch is released here.
+        if ownerName then clearPlantedOnCarry() end
     end
 
     -- A destroyed bomb must be reported as gone immediately, otherwise its marker
@@ -719,7 +967,7 @@ local function update()
         hideItem("Carrier")
     end
 
-    local planted, timer = bombAttributes()
+    local planted, timer = plantedInfo(worldBomb)
 
     -- On-screen debug readout (top-left, yellow) so the state is visible even
     -- when every console is blocked.
@@ -727,8 +975,9 @@ local function update()
     pcall(function()
         if debugText then
             debugText.Visible = true
-            -- Also report whether the bomb is on screen or clamped to an edge,
-            -- because that is the single most useful thing when it looks broken.
+            -- Also report whether the bomb is on screen, clamped to an edge, or
+            -- behind the camera, because that is the single most useful thing
+            -- when the marker looks wrong.
             local where = "none"
             if worldBomb then
                 where = "found"
@@ -739,8 +988,10 @@ local function update()
                     end)
                     if okp and sp and typeof(sp) == "Vector3" then
                         local vs = cam.ViewportSize
-                        if sp.X < 0 or sp.Y < 0 or sp.X > vs.X or sp.Y > vs.Y then
-                            where = "OFF-SCREEN (edge marker)"
+                        if sp.Z <= 0 then
+                            where = "BEHIND CAMERA (edge arrow)"
+                        elseif sp.X < 0 or sp.Y < 0 or sp.X > vs.X or sp.Y > vs.Y then
+                            where = "OFF-SCREEN (edge arrow)"
                         else
                             where = string.format("on screen (%.0f,%.0f)", sp.X, sp.Y)
                         end
@@ -748,9 +999,10 @@ local function update()
                 end
             end
             debugText.Text = string.format(
-                "C4 ESP  carrier=%s\nbomb=%s\nstatus=%s",
+                "C4 ESP  carrier=%s\nbomb=%s\nplanted=%s\nstatus=%s",
                 tostring(carrierName) or "none",
                 tostring(worldBomb and worldBomb.Name) or "none",
+                tostring(planted),
                 where
             )
         end
@@ -759,13 +1011,15 @@ local function update()
     if worldBomb then
         -- One rule decides the label, using the same scan that located the bomb:
         --
-        --   a <Name>_WeaponAttachments folder owns it -> C4 Carrier: <name>  (red)
-        --   the game reports it planted               -> C4 Planted <timer>  (amber)
-        --   otherwise (thrown, or dropped by a corpse)-> C4 Dropped          (green)
+        --   carried by a LIVING player  -> C4 Carrier: <name>  (red)
+        --   the game fired "Planted"    -> C4 Planted  <t>s     (amber)
+        --   anything else               -> C4 Dropped            (green)
         --
-        -- Nothing is derived from "is it under a character", because the bomb is
-        -- NOT parented to the character - it hangs off a sibling folder named
-        -- after the owner. That was the source of the wrong "Dropped" label.
+        -- "Anything else" covers all three drop cases the game produces: the
+        -- carrier dying, the carrier throwing it, and a mid-plant re-drop.
+        -- scanForBomb only returns a carrier name when the named owner is still
+        -- alive, so a corpse's leftover attachment folder reports as Dropped
+        -- instead of keeping the label stuck on "Carrier".
         local label
         local markerColor = color
 
