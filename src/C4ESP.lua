@@ -559,6 +559,8 @@ local probe = {
     lastOwnerPlayer = 0,
     lastScore = 0,
     stickyAlive = 0,
+    zoneCount = 0,
+    screenTimer = nil,
 }
 
 -- Resolve the bomb and, if it is being carried, by whom.
@@ -815,90 +817,198 @@ end
 -- once it is planted. Read at runtime; the instance dump does not record GUI text
 -- so this could not be confirmed offline, but it costs nothing to try and it
 -- yields the real timer instead of a guess.
-local function readScreenTimer(inst)
-    if not inst then return nil end
-
-    local screen = nil
-    pcall(function()
-        for _, d in ipairs(inst:GetDescendants()) do
-            if d.Name == "Screen" and d:IsA("BasePart") then screen = d break end
-        end
-    end)
-    if not screen then return nil end
-
-    local text = nil
-    pcall(function()
-        for _, g in ipairs(screen:GetDescendants()) do
-            if g:IsA("TextLabel") and g.Visible ~= false then text = tostring(g.Text) break end
-        end
-    end)
+--
+-- Every TextLabel on the screen is examined and the first one that parses as a
+-- clock wins. Taking the first label unconditionally was wrong: the C4 screen
+-- carries more than one, and picking a non-numeric one silently yielded nil,
+-- which is exactly the "planted=false with no explanation" case.
+local function parseClock(text)
     if type(text) ~= "string" then return nil end
 
-    text = text:match("^%s*(%S+)%s*$")
-    if not text then return nil end
+    local trimmed = text:match("^%s*(%S+)%s*$")
+    if not trimmed then return nil end
 
-    -- "1:23" / "1.23" -> 83 seconds
-    local m, s = text:match("^(%d+):(%d%d)$")
+    -- "0:38" / "1:05" -> seconds
+    local m, s = trimmed:match("^(%d+):(%d%d)$")
     if m then return (tonumber(m) * 60) + tonumber(s) end
 
-    -- Plain digits, optionally with a decimal point from a display like "0.5".
-    local n = tonumber(text)
+    -- Plain digits, with or without a decimal point ("38", "38.4").
+    local n = tonumber(trimmed)
     if n then
-        if n > 100 then return nil end      -- not a clock
+        if n > 100 then return nil end      -- too large to be a clock
         return n
     end
 
     return nil
 end
 
--- Bomb site zones. The dump shows Sites/ZoneParts_A and _B holding Parts with an
--- @Site attribute. Used only as a last-resort "planted" inference.
-local siteZones = nil
+local function readScreenTimer(inst)
+    if not inst then return nil end
 
-local function buildSiteZones()
-    if siteZones then return siteZones end
-    siteZones = {}
+    -- The Screen may sit on the bomb model or on an ancestor of it, so both are
+    -- consulted. The shape finder returns the inner "Weapon" model, which is
+    -- where the dump shows the Screen living.
+    local candidates = { inst }
+    local up = nil
+    pcall(function() up = inst.Parent end)
+    local guard = 0
+    while up and guard < 3 do
+        table.insert(candidates, up)
+        pcall(function() up = up.Parent end)
+        guard = guard + 1
+    end
 
-    local function collect(root)
+    for _, root in ipairs(candidates) do
+        local screens = {}
         pcall(function()
-            for _, f in ipairs(root:GetChildren()) do
-                if f:IsA("Folder") and f.Name == "Sites" then
-                    eachSubFolder(f, 3, function(zf)
-                        pcall(function()
-                            for _, part in ipairs(zf:GetChildren()) do
-                                if part:IsA("BasePart") then
-                                    local site = nil
-                                    pcall(function() site = part:GetAttribute("Site") end)
-                                    if site then
-                                        table.insert(siteZones, {
-                                            site = tostring(site),
-                                            pos = part.Position,
-                                            half = part.Size * 0.5,
-                                        })
-                                    end
-                                end
-                            end
-                        end)
-                    end)
+            for _, d in ipairs(root:GetDescendants()) do
+                if d.Name == "Screen" and d:IsA("BasePart") then
+                    table.insert(screens, d)
+                end
+            end
+        end)
+
+        for _, screen in ipairs(screens) do
+            local labels = {}
+            pcall(function()
+                for _, g in ipairs(screen:GetDescendants()) do
+                    if g:IsA("TextLabel") then table.insert(labels, g) end
+                end
+            end)
+            for _, g in ipairs(labels) do
+                local t = nil
+                pcall(function() t = g.Text end)
+                local seconds = parseClock(t)
+                if seconds then return seconds end
+            end
+        end
+    end
+
+    return nil
+end
+
+-- Bomb site zones.
+--
+-- The real path, from the dump's indentation levels:
+--
+--   Workspace                             lead 0
+--     Map                                 lead 4    <- Model
+--       Zones                             lead 8    <- Model
+--         Sites                           lead 12   <- Folder
+--           ZoneParts_A / ZoneParts_B               (Parts with @Site)
+--
+-- Two things made the site signal dead. "Sites" is not a direct child of
+-- Workspace or ReplicatedStorage, it is three levels down; and "Map" and "Zones"
+-- are MODELS, so the folder-only walk used everywhere else stops before reaching
+-- it. A search that only descends into Folders cannot find this at all.
+local siteZones = nil
+local siteSearch = { found = 0, nodes = 0, budget = 400 }
+
+-- Locate the "Sites" folder. The known path is tried first because it costs
+-- three property reads, then a bounded search so a future map rename still works
+-- without letting a whole-map walk stall the frame.
+local function locateSitesFolder()
+    local known = {
+        "Map.Zones.Sites",
+        "Map.Sites",
+        "Sites",
+        "Zones.Sites",
+    }
+    for _, path in ipairs(known) do
+        local node = Workspace
+        local ok = true
+        for seg in path:gmatch("[^.]+") do
+            local nextNode = nil
+            pcall(function() nextNode = node:FindFirstChild(seg) end)
+            if not nextNode then ok = false break end
+            node = nextNode
+        end
+        if ok and node then return node end
+    end
+
+    -- Bounded fallback. Models are followed as well as Folders, and the number of
+    -- GetChildren calls is capped so this can never walk the entire map.
+    local found = nil
+    local function walk(node, depth)
+        if found or depth > 6 then return end
+        siteSearch.nodes = siteSearch.nodes + 1
+        if siteSearch.nodes > siteSearch.budget then return end
+
+        pcall(function()
+            for _, child in ipairs(node:GetChildren()) do
+                if found then return end
+                if child:IsA("Folder") and child.Name == "Sites" then
+                    found = child
+                    return
+                end
+                if child:IsA("Folder") or child:IsA("Model") then
+                    walk(child, depth + 1)
                 end
             end
         end)
     end
 
-    pcall(function() collect(Workspace) end)
-    pcall(function() collect(ReplicatedStorage) end)
+    pcall(function() walk(Workspace, 0) end)
+    return found
+end
+
+local function buildSiteZones()
+    if siteZones then return siteZones end
+    siteZones = {}
+
+    local sites = locateSitesFolder()
+    siteSearch.found = (sites and 1) or 0
+    if not sites then return siteZones end
+
+    eachSubFolder(sites, 3, function(zf)
+        pcall(function()
+            for _, part in ipairs(zf:GetChildren()) do
+                if part:IsA("BasePart") then
+                    local site = nil
+                    pcall(function() site = part:GetAttribute("Site") end)
+                    if site then
+                        local pos, size = nil, nil
+                        pcall(function() pos = part.Position end)
+                        pcall(function() size = part.Size end)
+                        if pos then
+                            table.insert(siteZones, {
+                                site = tostring(site),
+                                pos = pos,
+                                size = size,
+                            })
+                        end
+                    end
+                end
+            end
+        end)
+    end)
 
     return siteZones
 end
+
+-- Proximity, not containment. The @Site parts are ZonePlus trigger volumes: they
+-- mark where a site is, but a planted bomb rests on the floor beside them rather
+-- than inside one, so a strict AABB test reported site=nil for a bomb that was
+-- demonstrably on site.
+local SITE_RADIUS = 60
 
 local function insideBombSite(position)
     if not position then return nil end
 
     for _, z in ipairs(buildSiteZones()) do
-        local dx = math.abs(position.X - z.pos.X)
-        local dy = math.abs(position.Y - z.pos.Y)
-        local dz = math.abs(position.Z - z.pos.Z)
-        if dx <= z.half.X and dy <= z.half.Y and dz <= z.half.Z then
+        local dx = position.X - z.pos.X
+        local dy = position.Y - z.pos.Y
+        local dz = position.Z - z.pos.Z
+        local distSq = (dx * dx) + (dy * dy) + (dz * dz)
+
+        local reach = SITE_RADIUS
+        if z.size then
+            -- A large zone part is itself the volume, so honour its extent.
+            local r = math.max(z.size.X, z.size.Y, z.size.Z) * 0.5
+            if r > reach then reach = r end
+        end
+
+        if distSq <= (reach * reach) then
             return z.site
         end
     end
@@ -924,6 +1034,13 @@ local function plantedInfo(bombInstance, position)
 
     -- The Screen text is the strongest live signal, and it carries the timer.
     local screenTimer = readScreenTimer(bombInstance)
+    probe.screenTimer = screenTimer
+
+    -- Report how many site zones were located, so "site=nil" can be told apart
+    -- from "the Sites folder was never found".
+    local zones = buildSiteZones()
+    probe.zoneCount = zones and #zones or 0
+
     local site = nil
     if (not plantedState.latched) and (not screenTimer) then
         site = insideBombSite(position)
@@ -1315,7 +1432,7 @@ local function update()
                 end
             end
             debugText.Text = string.format(
-                "C4 carrier=%s bomb=%s\nvia=%s planted=%s site=%s\natt=%d hol=%d own=%s\nscore=%d rig=%d alive=%d pl=%d stick=%d\nstatus=%s",
+                "C4 carrier=%s bomb=%s\nvia=%s planted=%s site=%s\natt=%d hol=%d own=%s zones=%d\nscore=%d rig=%d alive=%d pl=%d stick=%d scr=%s\nstatus=%s",
                 tostring(carrierName) or "nil",
                 tostring(worldBomb and worldBomb.Name) or "nil",
                 tostring(cache.bombSource) or "none",
@@ -1324,11 +1441,13 @@ local function update()
                 probe.attachmentFolders,
                 probe.holstersInFolders,
                 tostring(probe.lastOwner) or "-",
+                probe.zoneCount,
                 probe.lastScore,
                 probe.lastOwnerRig,
                 probe.lastOwnerAlive,
                 probe.lastOwnerPlayer,
                 probe.stickyAlive,
+                tostring(probe.screenTimer) or "-",
                 where
             )
         end
