@@ -294,39 +294,48 @@ end
 local function scanForBomb()
     local charsFolder = Workspace:FindFirstChild("Characters")
 
-    -- 1. Look inside every character first, so a carried bomb always wins over a
-    --    stale loose one.
-    --
     -- The result is assigned to upvalues rather than returned from inside the
-    -- pcall: a `return` inside pcall only returns from the anonymous function,
-    -- its value is discarded by the caller.
+    -- pcall: a `return` inside pcall only returns from the anonymous function, so
+    -- its value would be discarded by the caller.
     local carriedHolster = nil
     local carriedOwner = nil
 
+    -- 1. A bomb on a LIVE character wins over everything else.
+    --
+    --    "Live" matters: a corpse that is still parked in Characters keeps its
+    --    <name>_WeaponAttachments folder, and treating that as carried made the
+    --    ESP report a stale carrier forever while the real bomb lay on the floor.
+    --    Without this the carried branch shadowed the world branch completely.
     if charsFolder then
         pcall(function()
             for _, character in ipairs(charsFolder:GetChildren()) do
                 if character:IsA("Model") then
-                    -- the holster hangs off <name>_WeaponAttachments, which is a
-                    -- child of the character in this build
-                    local found = nil
+                    local alive = false
                     pcall(function()
-                        for _, att in ipairs(character:GetChildren()) do
-                            if found then break end
-                            if isWeaponAttachmentsName(att.Name) then
-                                found = findHolsterUnder(att)
-                            end
-                        end
+                        local hum = character:FindFirstChildOfClass("Humanoid")
+                        alive = (hum == nil) or (hum.Health > 0)
                     end)
 
-                    if not found then
-                        pcall(function() found = findHolsterUnder(character) end)
-                    end
+                    if alive then
+                        local found = nil
+                        pcall(function()
+                            for _, att in ipairs(character:GetChildren()) do
+                                if found then break end
+                                if isWeaponAttachmentsName(att.Name) then
+                                    found = findHolsterUnder(att)
+                                end
+                            end
+                        end)
 
-                    if found then
-                        carriedHolster = found
-                        carriedOwner = character
-                        return
+                        if not found then
+                            pcall(function() found = findHolsterUnder(character) end)
+                        end
+
+                        if found then
+                            carriedHolster = found
+                            carriedOwner = character
+                            return
+                        end
                     end
                 end
             end
@@ -338,25 +347,38 @@ local function scanForBomb()
     end
 
     -- 2. Loose in the world: dropped by a dead carrier, or planted on a site.
+    --
+    --    This walks EVERY descendant of Workspace rather than only the direct
+    --    children. The old version looked at Workspace:GetChildren() and one
+    --    extra level, so a bomb parented deep inside a map folder (Debris, the
+    --    plant-site folder, a corpse folder, ...) was never found and the ESP
+    --    reported "only the carried bomb works".
     local best = nil
     local bestDepth = nil
 
     pcall(function()
         for _, child in ipairs(Workspace:GetChildren()) do
             if child ~= charsFolder then
-                local found = findHolsterUnder(child)
-                if found then
-                    -- prefer the shallowest match (closest to the workspace root)
-                    local depth = 0
-                    pcall(function()
-                        local n = found.Parent
-                        while n and n ~= Workspace do
-                            depth = depth + 1
-                            n = n.Parent
+                -- direct child counts as depth 0
+                if isBombName(child.Name) and child:IsA("Model") then
+                    if (not bestDepth) or (0 < bestDepth) then
+                        best, bestDepth = child, 0
+                    end
+                end
+
+                for _, d in ipairs(child:GetDescendants()) do
+                    if d:IsA("Model") and isBombName(d.Name) then
+                        local depth = 0
+                        pcall(function()
+                            local n = d.Parent
+                            while n and n ~= Workspace do
+                                depth = depth + 1
+                                n = n.Parent
+                            end
+                        end)
+                        if (not bestDepth) or (depth < bestDepth) then
+                            best, bestDepth = d, depth
                         end
-                    end)
-                    if (not bestDepth) or (depth < bestDepth) then
-                        best, bestDepth = found, depth
                     end
                 end
             end
@@ -485,10 +507,9 @@ local function drawWorldBomb(camera, inst, color, label)
 
     local viewport = camera.ViewportSize
 
-    -- Off screen: instead of hiding the marker, clamp an arrow to the screen
-    -- edge so the bomb can still be located. The previous behaviour logged every
-    -- frame and showed nothing, which looked like "the ESP only works while
-    -- somebody is holding it in front of you".
+    -- Off screen: clamp a marker onto the screen edge so the bomb can still be
+    -- located. Hiding it entirely made the feature look broken whenever the bomb
+    -- was not directly in front of the player.
     if (screen.X < 0) or (screen.Y < 0)
         or (screen.X > viewport.X) or (screen.Y > viewport.Y) then
         local cx = viewport.X / 2
@@ -496,10 +517,15 @@ local function drawWorldBomb(camera, inst, color, label)
         local dx = screen.X - cx
         local dy = screen.Y - cy
 
-        -- push the arrow out to the edge of the screen along the same direction
-        local margin = 34
-        local halfW = (viewport.X / 2) - margin
-        local halfH = (viewport.Y / 2) - margin
+        -- Inset well away from the very edge so the marker is not clipped by the
+        -- screen border and is not hidden under the debug readout in the corner.
+        local marginX = 90
+        local marginY = 90
+        local halfW = (viewport.X / 2) - marginX
+        local halfH = (viewport.Y / 2) - marginY
+        if halfW < 40 then halfW = 40 end
+        if halfH < 40 then halfH = 40 end
+
         local scale = math.huge
         if math.abs(dx) > 0.0001 then scale = math.min(scale, halfW / math.abs(dx)) end
         if math.abs(dy) > 0.0001 then scale = math.min(scale, halfH / math.abs(dy)) end
@@ -508,35 +534,55 @@ local function drawWorldBomb(camera, inst, color, label)
         local ax = cx + (dx * scale)
         local ay = cy + (dy * scale)
 
+        -- Final hard clamp: scale alone can overshoot when one axis dominates.
+        ax = math.max(marginX * 0.5, math.min(viewport.X - marginX * 0.5, ax))
+        ay = math.max(marginY * 0.5, math.min(viewport.Y - marginY * 0.5, ay))
+
         local dist = math.floor(screen.Z)
 
         pcall(function()
-            item.Box.Position = Vector2.new(ax - (width / 2), ay - (width / 2))
-            item.Box.Size = Vector2.new(width, width)
+            -- A filled square plus a bigger label: the previous thin outline at
+            -- 1.5px was very easy to miss at the screen edge.
+            item.Box.Position = Vector2.new(ax - 15, ay - 15)
+            item.Box.Size = Vector2.new(30, 30)
+            item.Box.Thickness = 3
+            item.Box.Filled = true
+            item.Box.Transparency = 0.35
             item.Box.Color = color
+            item.Box.ZIndex = 50
             item.Box.Visible = true
 
             item.Label.Text = string.format("%s  %dm", tostring(label), dist)
-            item.Label.Position = Vector2.new(ax, ay - (width / 2) - 16)
-            item.Label.Color = color
+            item.Label.Size = 15
+            item.Label.Outline = true
+            item.Label.Center = true
+            item.Label.Position = Vector2.new(ax, ay - 30)
+            item.Label.Color = Color3.fromRGB(255, 240, 90)
+            item.Label.ZIndex = 51
             item.Label.Visible = true
         end)
 
-        stateLog("bomb is off screen - showing edge marker at ("
-            .. tostring(math.floor(screen.X)) .. ", " .. tostring(math.floor(screen.Y))
-            .. ") Z=" .. tostring(dist))
+        stateLog("bomb off screen - edge marker at ("
+            .. tostring(math.floor(ax)) .. ", " .. tostring(math.floor(ay))
+            .. ") dist=" .. tostring(dist) .. "m")
         return
     end
 
     local okDraw = pcall(function()
         item.Box.Position = Vector2.new(screen.X - (width / 2), screen.Y - (width / 2))
         item.Box.Size = Vector2.new(width, width)
+        item.Box.Thickness = 1.5
+        item.Box.Filled = false
+        item.Box.Transparency = 0
+        item.Box.ZIndex = 2
         item.Box.Color = color
         item.Box.Visible = true
 
         item.Label.Text = label
+        item.Label.Size = 13
         item.Label.Position = Vector2.new(screen.X, screen.Y - (width / 2) - 16)
         item.Label.Color = color
+        item.Label.ZIndex = 3
         item.Label.Visible = true
     end)
 
@@ -645,11 +691,31 @@ local function update()
     pcall(function()
         if debugText then
             debugText.Visible = true
+            -- Also report whether the bomb is on screen or clamped to an edge,
+            -- because that is the single most useful thing when it looks broken.
+            local where = "none"
+            if worldBomb then
+                where = "found"
+                local cam = Workspace.CurrentCamera
+                if cam then
+                    local okp, sp = pcall(function()
+                        return cam:WorldToViewportPoint(resolvePosition(worldBomb, 0) or Vector3.new())
+                    end)
+                    if okp and sp and typeof(sp) == "Vector3" then
+                        local vs = cam.ViewportSize
+                        if sp.X < 0 or sp.Y < 0 or sp.X > vs.X or sp.Y > vs.Y then
+                            where = "OFF-SCREEN (edge marker)"
+                        else
+                            where = string.format("on screen (%.0f,%.0f)", sp.X, sp.Y)
+                        end
+                    end
+                end
+            end
             debugText.Text = string.format(
-                "C4 ESP  enabled=%s\ncarrier=%s\nbomb=%s",
-                tostring(enabled),
+                "C4 ESP  carrier=%s\nbomb=%s\nstatus=%s",
                 tostring(carrier and carrier.Name) or "none",
-                tostring(worldBomb and worldBomb.Name) or "none"
+                tostring(worldBomb and worldBomb.Name) or "none",
+                where
             )
         end
     end)
