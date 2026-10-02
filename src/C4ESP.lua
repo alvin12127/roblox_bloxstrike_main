@@ -275,136 +275,155 @@ local function findHolsterUnder(node, maxDepth)
     return found, owner
 end
 
--- Find the C4 itself, wherever it is, and report who is holding it.
+-- The C4 is a single "BombHolster" Model. From an instance dump of the live
+-- game the real hierarchy is:
 --
--- The bomb is a single "BombHolster" Model (confirmed by an instance dump):
---   Characters/<Player>
---     <Player>_WeaponAttachments   (Folder, PersistentDebris)
---       T Knife                   (Model)
---         Interactables           (Folder)
---           BombHolster           (Model, PrimaryPart "Body")
+--   Characters                                     (Folder)
+--     Terrorists / Counter-Terrorists / Hostages    (Folders, per team)
+--       <Player>                                   (Model, the character)
+--     <Player>_WeaponAttachments                   (Folder, PersistentDebris)
+--       <Player>_Weapon                            (Model)
+--         T Knife                                  (Model)
+--           Interactables                          (Folder)
+--             BombHolster                          (Model, PP "Body")
 --
--- The whole behaviour comes from one rule instead of separate carried / dropped /
--- planted code paths:
+-- The critical detail: <Player>_WeaponAttachments is a SIBLING of the character
+-- models, sitting directly under Characters - it is NOT a child of the player
+-- model. An earlier version searched character:GetChildren() for it, which can
+-- never find it, so the carrier was never resolved and the bomb was reported as
+-- "Dropped" even while somebody was carrying it.
 --
---   * find the BombHolster, wherever it currently sits
---   * walk UP its parents; if it is under a LIVE character, that character is
---     the carrier
---   * otherwise the bomb is loose -> dropped (or planted)
---
--- So carrying, walking, dying, dropping, throwing and planting all resolve
--- through the same lookup. When the carrier dies the game re-parents the
--- holster out of the character, the "under a live character" test stops matching
--- and the marker automatically switches to "C4 Dropped" at the same world
--- position. There is no state to keep in sync.
---
--- Returns: holster instance, owning character model (nil when loose).
-local function scanForBomb()
+-- Because the attachment folder is named after its owner, the carrier is derived
+-- from that name instead of from instance parentage.
+
+local function ownerNameFromAttachment(name)
+    if type(name) ~= "string" then return nil end
+    return name:match("^(.-)_WeaponAttachments$")
+        or name:match("^(.-)%.WeaponAttachments$")
+        or name:match("^(.-)_WeaponAttachment$")
+end
+
+-- Every character model in the game, including the ones nested in team folders.
+local function eachCharacter(fn)
     local charsFolder = Workspace:FindFirstChild("Characters")
+    if not charsFolder then return end
 
-    -- 1. A bomb welded to a live character: that is the carrier.
-    --
-    --    A corpse still parked in Characters keeps its <name>_WeaponAttachments
-    --    folder, so liveness is checked before treating it as carried. Otherwise
-    --    a dead body shadowed the real bomb on the floor for the whole round.
-    --
-    --    The result is stored in upvalues, NOT returned from inside the pcall: a
-    --    `return` there only returns from the anonymous function and the caller
-    --    would silently get nil. That mistake was made and fixed once already, so
-    --    the flow is written out explicitly instead.
-    local carriedHolster = nil
-    local carriedOwner = nil
+    local seen = {}
 
-    if charsFolder then
+    local function consider(node, depth)
+        if depth > 3 then return end
         pcall(function()
-            for _, character in ipairs(charsFolder:GetChildren()) do
-                if character:IsA("Model") and (not carriedHolster) then
-                    local alive = true
-                    pcall(function()
-                        local hum = character:FindFirstChildOfClass("Humanoid")
-                        if hum then alive = (hum.Health > 0) end
-                    end)
-
-                    if alive then
-                        local found = nil
-                        pcall(function()
-                            for _, att in ipairs(character:GetChildren()) do
-                                if found then break end
-                                if isWeaponAttachmentsName(att.Name) then
-                                    found = findHolsterUnder(att)
-                                end
-                            end
-                        end)
-
-                        if not found then
-                            pcall(function() found = findHolsterUnder(character) end)
-                        end
-
-                        if found then
-                            carriedHolster = found
-                            carriedOwner = character
-                        end
+            for _, child in ipairs(node:GetChildren()) do
+                if not seen[child] then
+                    seen[child] = true
+                    -- a character model is identified by having a Humanoid
+                    local hum = nil
+                    pcall(function() hum = child:FindFirstChildOfClass("Humanoid") end)
+                    if child:IsA("Model") and hum then
+                        fn(child)
+                    else
+                        consider(child, depth + 1)
                     end
                 end
             end
         end)
     end
 
-    if carriedHolster then
-        return carriedHolster, carriedOwner
+    consider(charsFolder, 0)
+end
+
+-- Live character models keyed by lowercased name.
+local function buildCharacterMap()
+    local map = {}
+    eachCharacter(function(char)
+        local hum = nil
+        pcall(function() hum = char:FindFirstChildOfClass("Humanoid") end)
+        if (not hum) or (hum.Health > 0) then
+            map[tostring(char.Name):lower()] = char
+        end
+    end)
+    return map
+end
+
+-- Resolve the bomb and, if it is being carried, by whom.
+--
+-- Returns: holster, holderName, holderCharacter
+local function scanForBomb()
+    local charsFolder = Workspace:FindFirstChild("Characters")
+    local chars = buildCharacterMap()
+
+    -- 1. A BombHolster inside a <Name>_WeaponAttachments folder anywhere under
+    --    Characters. Those folders are siblings of the character models, so the
+    --    whole Characters subtree is walked instead of a single level.
+    if charsFolder then
+        local foundHolster, foundOwner, foundChar
+        pcall(function()
+            for _, d in ipairs(charsFolder:GetDescendants()) do
+                if (not foundHolster) and d:IsA("Folder")
+                    and isWeaponAttachmentsName(d.Name) then
+                    local holster = findHolsterUnder(d)
+                    if holster then
+                        foundHolster = holster
+                        foundOwner = ownerNameFromAttachment(d.Name)
+                        foundChar = foundOwner and chars[foundOwner:lower()] or nil
+                    end
+                end
+            end
+        end)
+        if foundHolster then
+            return foundHolster, foundOwner, foundChar
+        end
     end
 
-    -- 2. Otherwise the bomb is loose in the world: dropped by a dead carrier,
-    --    thrown, or planted on a site.
-    --
-    --    Every descendant is examined, not just the direct children, because the
-    --    game parents it into Debris or a map folder several levels down.
+    -- 2. A bomb welded directly to a character (some builds place it this way).
+    local welded = nil
+    local weldedName = nil
+    local weldedChar = nil
+    eachCharacter(function(char)
+        if not welded then
+            local holster = nil
+            pcall(function() holster = findHolsterUnder(char) end)
+            if holster then
+                welded = holster
+                weldedName = tostring(char.Name)
+                weldedChar = char
+            end
+        end
+    end)
+    if welded then
+        return welded, weldedName, weldedChar
+    end
+
+    -- 3. Loose in the world: dropped by a dead carrier, thrown, or planted.
+    --    Every descendant is examined, because the game parents the bomb into
+    --    Debris or a map folder several levels down.
     local best = nil
     local bestDepth = nil
 
     pcall(function()
         for _, child in ipairs(Workspace:GetChildren()) do
-            if child ~= charsFolder then
-                if child:IsA("Model") and isBombName(child.Name) then
-                    best, bestDepth = child, 0
-                end
-
-                for _, d in ipairs(child:GetDescendants()) do
-                    if d:IsA("Model") and isBombName(d.Name) then
-                        local depth = 0
-                        pcall(function()
-                            local n = d.Parent
-                            while n and n ~= Workspace do
-                                depth = depth + 1
-                                n = n.Parent
-                            end
-                        end)
-                        if (not bestDepth) or (depth < bestDepth) then
-                            best, bestDepth = d, depth
+            if child:IsA("Model") and isBombName(child.Name) then
+                best, bestDepth = child, 0
+            end
+            for _, d in ipairs(child:GetDescendants()) do
+                if d:IsA("Model") and isBombName(d.Name) then
+                    local depth = 0
+                    pcall(function()
+                        local n = d.Parent
+                        while n and n ~= Workspace do
+                            depth = depth + 1
+                            n = n.Parent
                         end
+                    end)
+                    if (not bestDepth) or (depth < bestDepth) then
+                        best, bestDepth = d, depth
                     end
                 end
             end
         end
     end)
 
-    return best, nil
-end
-
--- Character that should get the "C4 Carrier" label: whoever the holster is
--- attached to. Returns nil when the bomb is loose on the ground.
-local function findBombCarrier()
-    local holster, owner = scanForBomb()
-    if holster and owner and (owner ~= LocalPlayer.Character) then
-        return owner
-    end
-    return nil
-end
-
--- The physical bomb, wherever it currently is.
-local function findWorldBomb()
-    local holster = scanForBomb()
-    return holster
+    return best, nil, nil
 end
 
 -- Bomb state. The dump shows the game drives this through Remotes rather than
@@ -604,50 +623,62 @@ end
 -- ==========================================================
 -- The workspace scans must NOT run every frame - they walk the whole tree.
 local cache = {
-    carrier = nil,
-    carrierValid = false,
     worldBomb = nil,
+    carrierName = nil,
+    carrier = nil,
     worldBombValid = false,
-    lastCarrierScan = 0,
     lastBombScan = 0
 }
 
-local CARRIER_INTERVAL = 0.25
-local BOMB_INTERVAL = 0.5
+local BOMB_INTERVAL = 0.35
 
-local function getCarrierCached()
+-- The scan is the expensive part, so it runs once per interval and every piece
+-- of state (bomb, carrier name, carrier character) is read from the same result.
+-- Running separate scans per value is what previously let the label and the
+-- marker disagree about whether the bomb was carried.
+local function refreshScan()
     local now = os.clock()
-    if (not cache.carrierValid) or ((now - cache.lastCarrierScan) >= CARRIER_INTERVAL) then
-        cache.carrierValid = true
-        cache.lastCarrierScan = now
-        cache.carrier = findBombCarrier()
-    end
-    -- Drop the cached instance if it was removed from the game. Comparing the
-    -- cached holster's owner is not enough on its own: when the carrier dies the
-    -- holster is re-parented, so the stale character reference must go too.
-    local carrier = cache.carrier
-    if carrier and (not carrier.Parent) then
-        cache.carrier = nil
-        carrier = nil
-    end
-    return carrier
-end
-
-local function getWorldBombCached()
-    local now = os.clock()
-    -- A destroyed bomb must be reported as gone immediately, otherwise its marker
-    -- keeps drawing at the last known position for a whole scan interval.
-    if cache.worldBomb and (not cache.worldBomb.Parent) then
-        cache.worldBomb = nil
-        cache.worldBombValid = false
-    end
-
     if (not cache.worldBombValid) or ((now - cache.lastBombScan) >= BOMB_INTERVAL) then
         cache.worldBombValid = true
         cache.lastBombScan = now
-        cache.worldBomb = findWorldBomb()
+
+        local holster, ownerName, char = scanForBomb()
+        cache.worldBomb = holster
+        cache.carrierName = ownerName
+        cache.carrier = char
     end
+
+    -- A destroyed bomb must be reported as gone immediately, otherwise its marker
+    -- keeps drawing at the last known position for a whole scan interval. The
+    -- carrier has to be cleared with it: when the carrier dies, the attachment
+    -- folder is destroyed and a new holster appears elsewhere, so a stale cached
+    -- name would keep labelling the dropped bomb as carried.
+    if cache.worldBomb and (not cache.worldBomb.Parent) then
+        cache.worldBomb = nil
+        cache.carrierName = nil
+        cache.carrier = nil
+        cache.worldBombValid = false
+    end
+
+    if cache.carrier and (not cache.carrier.Parent) then
+        cache.carrier = nil
+        cache.carrierName = nil
+    end
+end
+
+local function getWorldBombCached()
+    refreshScan()
     return cache.worldBomb
+end
+
+local function getCarrierNameCached()
+    refreshScan()
+    return cache.carrierName
+end
+
+local function getCarrierCharCached()
+    refreshScan()
+    return cache.carrier
 end
 
 -- ==========================================================
@@ -677,16 +708,18 @@ local function update()
 
     local color = Color3.fromRGB(255, 70, 70)
 
-    local carrier = getCarrierCached()
+    -- One scan answers everything: where the bomb is and who is holding it.
+    local worldBomb = getWorldBombCached()
+    local carrierName = getCarrierNameCached()
+    local carrierChar = getCarrierCharCached()
 
-    if carrier then
-        drawCarrier(camera, carrier, color)
+    if carrierChar then
+        drawCarrier(camera, carrierChar, color)
     else
         hideItem("Carrier")
     end
 
     local planted, timer = bombAttributes()
-    local worldBomb = getWorldBombCached()
 
     -- On-screen debug readout (top-left, yellow) so the state is visible even
     -- when every console is blocked.
@@ -716,7 +749,7 @@ local function update()
             end
             debugText.Text = string.format(
                 "C4 ESP  carrier=%s\nbomb=%s\nstatus=%s",
-                tostring(carrier and carrier.Name) or "none",
+                tostring(carrierName) or "none",
                 tostring(worldBomb and worldBomb.Name) or "none",
                 where
             )
@@ -724,45 +757,24 @@ local function update()
     end)
 
     if worldBomb then
-        -- One rule decides the label: is the bomb welded to a live character?
+        -- One rule decides the label, using the same scan that located the bomb:
         --
-        --   attached to a live character -> C4 Carrier: <name>
-        --   planted (game says so)        -> C4 Planted <timer>
-        --   just left the hand / landed  -> C4 Dropped
+        --   a <Name>_WeaponAttachments folder owns it -> C4 Carrier: <name>  (red)
+        --   the game reports it planted               -> C4 Planted <timer>  (amber)
+        --   otherwise (thrown, or dropped by a corpse)-> C4 Dropped          (green)
         --
-        -- Deriving this from `planted` alone reported "Dropped" while the bomb was
-        -- still on somebody's back, which is what the earlier version did wrong.
-        local holderName = nil
-        local holderAlive = false
-        pcall(function()
-            local chars = Workspace:FindFirstChild("Characters")
-            if chars then
-                for _, c in ipairs(chars:GetChildren()) do
-                    if c:IsA("Model") and worldBomb:IsDescendantOf(c) then
-                        local hum = nil
-                        pcall(function() hum = c:FindFirstChildOfClass("Humanoid") end)
-                        if (not hum) or (hum.Health > 0) then
-                            local pl = Players:FindFirstChild(c.Name)
-                            holderName = (pl and pl.DisplayName) or c.Name
-                            holderAlive = true
-                        end
-                        break
-                    end
-                end
-            end
-        end)
-
+        -- Nothing is derived from "is it under a character", because the bomb is
+        -- NOT parented to the character - it hangs off a sibling folder named
+        -- after the owner. That was the source of the wrong "Dropped" label.
         local label
         local markerColor = color
-        if holderName and holderAlive then
-            -- carried: red, matching the carrier label
-            label = "C4 Carrier: " .. tostring(holderName)
+
+        if carrierName then
+            label = "C4 Carrier: " .. tostring(carrierName)
         elseif planted then
-            -- planted: amber, so it is obvious the round is decided
             label = string.format("C4 Planted  %.0fs", timer)
             markerColor = Color3.fromRGB(255, 170, 40)
         else
-            -- loose: green, distinct from both
             label = "C4 Dropped"
             markerColor = Color3.fromRGB(90, 230, 120)
         end
@@ -806,10 +818,11 @@ function C4ESP.cleanup()
         C4ESP.Items[key] = nil
     end
 
-    cache.carrier = nil
-    cache.carrierValid = false
     cache.worldBomb = nil
+    cache.carrierName = nil
+    cache.carrier = nil
     cache.worldBombValid = false
+    cache.lastBombScan = 0
     lastState = ""
 
     storedConfig = nil
