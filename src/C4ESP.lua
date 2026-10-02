@@ -275,45 +275,54 @@ local function findHolsterUnder(node, maxDepth)
     return found, owner
 end
 
--- The C4 is tracked in every state through one scan of the BombHolster model.
+-- Find the C4 itself, wherever it is, and report who is holding it.
 --
--- From the instance dump, the real hierarchy is:
+-- The bomb is a single "BombHolster" Model (confirmed by an instance dump):
 --   Characters/<Player>
---     <Player>_WeaponAttachments     (Folder, PersistentDebris)
---       T Knife                     (Model)
---         Interactables             (Folder)
---           BombHolster             (Model, PrimaryPart "Body")
+--     <Player>_WeaponAttachments   (Folder, PersistentDebris)
+--       T Knife                   (Model)
+--         Interactables           (Folder)
+--           BombHolster           (Model, PrimaryPart "Body")
 --
--- When the carrier dies the holster is re-parented into the world (Debris or a
--- map folder) and keeps its name, so the SAME lookup finds it dropped or
--- planted. The old logic only looked for loose bombs OUTSIDE Characters and
--- only while excluding character subtrees, which is why a dropped or planted
--- bomb was never found.
+-- The whole behaviour comes from one rule instead of separate carried / dropped /
+-- planted code paths:
 --
--- Returns: holster instance, owning character model (nil when loose on the map)
+--   * find the BombHolster, wherever it currently sits
+--   * walk UP its parents; if it is under a LIVE character, that character is
+--     the carrier
+--   * otherwise the bomb is loose -> dropped (or planted)
+--
+-- So carrying, walking, dying, dropping, throwing and planting all resolve
+-- through the same lookup. When the carrier dies the game re-parents the
+-- holster out of the character, the "under a live character" test stops matching
+-- and the marker automatically switches to "C4 Dropped" at the same world
+-- position. There is no state to keep in sync.
+--
+-- Returns: holster instance, owning character model (nil when loose).
 local function scanForBomb()
     local charsFolder = Workspace:FindFirstChild("Characters")
 
-    -- The result is assigned to upvalues rather than returned from inside the
-    -- pcall: a `return` inside pcall only returns from the anonymous function, so
-    -- its value would be discarded by the caller.
+    -- 1. A bomb welded to a live character: that is the carrier.
+    --
+    --    A corpse still parked in Characters keeps its <name>_WeaponAttachments
+    --    folder, so liveness is checked before treating it as carried. Otherwise
+    --    a dead body shadowed the real bomb on the floor for the whole round.
+    --
+    --    The result is stored in upvalues, NOT returned from inside the pcall: a
+    --    `return` there only returns from the anonymous function and the caller
+    --    would silently get nil. That mistake was made and fixed once already, so
+    --    the flow is written out explicitly instead.
     local carriedHolster = nil
     local carriedOwner = nil
 
-    -- 1. A bomb on a LIVE character wins over everything else.
-    --
-    --    "Live" matters: a corpse that is still parked in Characters keeps its
-    --    <name>_WeaponAttachments folder, and treating that as carried made the
-    --    ESP report a stale carrier forever while the real bomb lay on the floor.
-    --    Without this the carried branch shadowed the world branch completely.
     if charsFolder then
         pcall(function()
             for _, character in ipairs(charsFolder:GetChildren()) do
-                if character:IsA("Model") then
-                    local alive = false
+                if character:IsA("Model") and (not carriedHolster) then
+                    local alive = true
                     pcall(function()
                         local hum = character:FindFirstChildOfClass("Humanoid")
-                        alive = (hum == nil) or (hum.Health > 0)
+                        if hum then alive = (hum.Health > 0) end
                     end)
 
                     if alive then
@@ -334,7 +343,6 @@ local function scanForBomb()
                         if found then
                             carriedHolster = found
                             carriedOwner = character
-                            return
                         end
                     end
                 end
@@ -346,24 +354,19 @@ local function scanForBomb()
         return carriedHolster, carriedOwner
     end
 
-    -- 2. Loose in the world: dropped by a dead carrier, or planted on a site.
+    -- 2. Otherwise the bomb is loose in the world: dropped by a dead carrier,
+    --    thrown, or planted on a site.
     --
-    --    This walks EVERY descendant of Workspace rather than only the direct
-    --    children. The old version looked at Workspace:GetChildren() and one
-    --    extra level, so a bomb parented deep inside a map folder (Debris, the
-    --    plant-site folder, a corpse folder, ...) was never found and the ESP
-    --    reported "only the carried bomb works".
+    --    Every descendant is examined, not just the direct children, because the
+    --    game parents it into Debris or a map folder several levels down.
     local best = nil
     local bestDepth = nil
 
     pcall(function()
         for _, child in ipairs(Workspace:GetChildren()) do
             if child ~= charsFolder then
-                -- direct child counts as depth 0
-                if isBombName(child.Name) and child:IsA("Model") then
-                    if (not bestDepth) or (0 < bestDepth) then
-                        best, bestDepth = child, 0
-                    end
+                if child:IsA("Model") and isBombName(child.Name) then
+                    best, bestDepth = child, 0
                 end
 
                 for _, d in ipairs(child:GetDescendants()) do
@@ -721,17 +724,28 @@ local function update()
     end)
 
     if worldBomb then
-        -- The label must describe where the bomb actually is, not just whether a
-        -- planted flag is set. Deriving it from `planted` alone reported
-        -- "C4 Dropped" while an enemy was still carrying it.
+        -- One rule decides the label: is the bomb welded to a live character?
+        --
+        --   attached to a live character -> C4 Carrier: <name>
+        --   planted (game says so)        -> C4 Planted <timer>
+        --   just left the hand / landed  -> C4 Dropped
+        --
+        -- Deriving this from `planted` alone reported "Dropped" while the bomb was
+        -- still on somebody's back, which is what the earlier version did wrong.
         local holderName = nil
+        local holderAlive = false
         pcall(function()
             local chars = Workspace:FindFirstChild("Characters")
             if chars then
                 for _, c in ipairs(chars:GetChildren()) do
                     if c:IsA("Model") and worldBomb:IsDescendantOf(c) then
-                        local pl = Players:FindFirstChild(c.Name)
-                        holderName = (pl and pl.DisplayName) or c.Name
+                        local hum = nil
+                        pcall(function() hum = c:FindFirstChildOfClass("Humanoid") end)
+                        if (not hum) or (hum.Health > 0) then
+                            local pl = Players:FindFirstChild(c.Name)
+                            holderName = (pl and pl.DisplayName) or c.Name
+                            holderAlive = true
+                        end
                         break
                     end
                 end
@@ -739,19 +753,21 @@ local function update()
         end)
 
         local label
-        if holderName then
-            if planted then
-                label = string.format("C4 Planted  %.0fs", timer)
-            else
-                label = "C4 Carrier: " .. tostring(holderName)
-            end
+        local markerColor = color
+        if holderName and holderAlive then
+            -- carried: red, matching the carrier label
+            label = "C4 Carrier: " .. tostring(holderName)
         elseif planted then
+            -- planted: amber, so it is obvious the round is decided
             label = string.format("C4 Planted  %.0fs", timer)
+            markerColor = Color3.fromRGB(255, 170, 40)
         else
+            -- loose: green, distinct from both
             label = "C4 Dropped"
+            markerColor = Color3.fromRGB(90, 230, 120)
         end
 
-        drawWorldBomb(camera, worldBomb, color, label)
+        drawWorldBomb(camera, worldBomb, markerColor, label)
     else
         hideItem("World")
         stateLog("no bomb instance found in workspace yet")
