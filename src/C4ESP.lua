@@ -665,6 +665,8 @@ local plantedState = {
     latched = false,
     latchedAt = nil,
     hookInstalled = false,
+    deepSearched = false,
+    allowDeepSearch = false,
     missingSince = nil,
     -- When the countdown started for the bomb currently on the ground. Anchored
     -- here rather than read from the game, because every game-provided value was
@@ -682,10 +684,15 @@ local function releasePlanted()
     plantedState.countdownBomb = nil
 end
 
--- The remotes live at ReplicatedStorage/NetworkRemotes/C4/<name>. Three
-    -- fallback layouts are tried as well, because a remote moving one folder up
-    -- would otherwise make "Planted" silently unreachable again - which is
-    -- exactly how this feature failed in the first place.
+-- The remotes live at ReplicatedStorage/NetworkRemotes/C4/<name>. Two other
+-- layouts are accepted for the same reason: a remote moving one folder up would
+-- otherwise make "Planted" silently unreachable again, which is exactly how this
+-- feature failed in the first place.
+--
+-- The ReplicatedStorage:GetDescendants() fallbacks only run when
+-- plantedState.allowDeepSearch is set, which happens exactly once per session.
+-- They allocate a table covering the entire tree, which is not something to do
+-- from the render path every frame.
 local function locateC4Remote(name)
     local remotes = nil
     pcall(function() remotes = ReplicatedStorage:FindFirstChild("NetworkRemotes") end)
@@ -694,60 +701,86 @@ local function locateC4Remote(name)
     if remotes then
         pcall(function() c4 = remotes:FindFirstChild("C4") end)
     end
+
+    local function pick(container)
+        if not container then return nil end
+        local ev = nil
+        pcall(function() ev = container:FindFirstChild(name) end)
+        if ev and ev:IsA("RemoteEvent") then return ev end
+        return nil
+    end
+
+    local direct = pick(c4) or pick(remotes)
+    if direct or not plantedState.allowDeepSearch then return direct end
+
     if not c4 then
         pcall(function()
             for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
                 if d:IsA("Folder") and d.Name == "C4" then c4 = d break end
             end
         end)
+        direct = pick(c4)
+        if direct then return direct end
     end
 
-    local function pick(container)
-        local ev = nil
-        if container then
-            pcall(function() ev = container:FindFirstChild(name) end)
+    local found = nil
+    pcall(function()
+        for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
+            if d.Name == name and d:IsA("RemoteEvent") then found = d break end
         end
-        if ev and ev:IsA("RemoteEvent") then return ev end
-        return nil
-    end
-
-    return pick(c4) or pick(remotes)
-        or (function()
-            local found = nil
-            pcall(function()
-                for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
-                    if d.Name == name and d:IsA("RemoteEvent") then found = d break end
-                end
-            end)
-            return found
-        end)()
+    end)
+    return found
 end
 
 local function installPlantedHook()
     if plantedState.hookInstalled then return end
 
-    pcall(function()
-        local function connect(name, fn)
-            local ev = locateC4Remote(name)
-            if not ev then return false end
-            ev.OnClientEvent:Connect(fn)
-            return true
-        end
+    -- The cheap lookup is two FindFirstChild calls. Only when it fails does the
+    -- code fall back to ReplicatedStorage:GetDescendants(), which allocates a
+    -- table covering the whole tree - and that fallback runs AT MOST ONCE.
+    --
+    -- An earlier version retried the fallback every frame whenever the hook had
+    -- not installed, which is a stutter source; a TTL backoff was worse, because
+    -- it delayed picking up a remote that appeared a frame later. The remote
+    -- folder does not appear mid-round, so one attempt is genuinely enough.
+    local function connect(name, fn)
+        local ev = locateC4Remote(name)
+        if not ev then return false end
+        ev.OnClientEvent:Connect(fn)
+        return true
+    end
 
-        local hooked = false
+    -- All four are connected every time. Connecting only "Planted" and skipping
+    -- the rest once it succeeds looks like an optimisation but leaves the latch
+    -- unable to be released by a defuse.
+    local hooked = connect("Planted", function()
+        plantedState.latched = true
+        plantedState.latchedAt = os.clock()
+    end)
+
+    -- The plant ended: defused, or cancelled. Any of these releases it, so a
+    -- stale latch cannot survive into the next round.
+    for _, name in ipairs({ "Defused", "ForceCancel", "Cancel" }) do
+        hooked = connect(name, function() releasePlanted() end) or hooked
+    end
+
+    if not hooked and not plantedState.deepSearched then
+        -- One retry with the expensive whole-tree lookup, then never again.
+        plantedState.deepSearched = true
+        plantedState.allowDeepSearch = true
+
         hooked = connect("Planted", function()
             plantedState.latched = true
             plantedState.latchedAt = os.clock()
-        end) or hooked
-
-        -- The plant ended: defused, or cancelled. Any of these releases it, so a
-        -- stale latch cannot survive into the next round.
+        end)
         for _, name in ipairs({ "Defused", "ForceCancel", "Cancel" }) do
             hooked = connect(name, function() releasePlanted() end) or hooked
         end
 
-        plantedState.hookInstalled = hooked
-    end)
+        plantedState.allowDeepSearch = false
+    end
+
+    plantedState.hookInstalled = hooked
 end
 
 
