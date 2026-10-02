@@ -305,9 +305,17 @@ reportInit("SkinChanger", function()
     local scDatabase     = scImport("Database")
     local scEngine       = scImport("Engine")
     local scAPI          = scImport("API")
+    local scSkinsLib     = scImport("SkinsLib")
     local scKnifeCatalog = scImport("KnifeCatalog")
     local scGunCatalog   = scImport("GunCatalog")
     local scGloveCatalog = scImport("GloveCatalog")
+
+    -- The catalogs read this global. They used to require the game's skin module
+    -- from a hardcoded path that does not exist in this build, which left every
+    -- 3D preview rendering as an empty box.
+    _G.__bloxstrikeSkinsLib = scSkinsLib
+    pcall(warn, "[Bloxstrike] SkinsLib resolved: "
+        .. tostring(scSkinsLib and scSkinsLib.Resolved))
 
     scAPI.bind(scConfig, scDatabase, scEngine, scKnifeCatalog, scGunCatalog)
     if scAPI.bindGloveCatalog then
