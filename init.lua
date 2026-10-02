@@ -26,6 +26,22 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Camera = Workspace.CurrentCamera
 
+-- Repo + branch to pull modules from.
+--
+-- The branch is read from a global so a test loader can point the whole cheat at
+-- a side branch without this file needing a different version per branch. The
+-- URL is built from a table lookup rather than by rewriting game.HttpGet, because
+-- executors do not allow assigning to game members.
+local REPO_MAIN = "alvin12127/roblox_bloxstrike_main"
+local REPO_SC   = "alvin12127/roblox_bloxstrike_SC"
+
+local BRANCH_MAIN = (_G.BloxstrikeBranch or "main")
+local BRANCH_SC   = (_G.BloxstrikeSCBranch or "main")
+
+local function rawUrl(repo, branch, path)
+    return "https://raw.githubusercontent.com/" .. repo .. "/" .. branch .. "/" .. path
+end
+
 -- module loader
 local modules = {}
 local function import(moduleName)
@@ -69,7 +85,8 @@ local function import(moduleName)
 
     -- remote github fallback (timestamped so the executor never serves a stale copy)
     local okHttp, remoteContent = pcall(function()
-        return game:HttpGet("https://raw.githubusercontent.com/alvin12127/roblox_bloxstrike_main/main/src/" .. moduleName .. ".lua?t=" .. tostring(os.time()))
+        return game:HttpGet(rawUrl(REPO_MAIN, BRANCH_MAIN,
+            "src/" .. moduleName .. ".lua") .. "?t=" .. tostring(os.time()))
     end)
     if okHttp and remoteContent and #remoteContent > 0 then
         local res = tryRun(loadstring(remoteContent))
@@ -261,7 +278,8 @@ reportInit("SkinChanger", function()
 
         -- Remote GitHub fallback
         local okHttp, remoteContent = pcall(function()
-            return game:HttpGet("https://raw.githubusercontent.com/alvin12127/roblox_bloxstrike_SC/main/src/" .. moduleName .. ".lua?t=" .. tostring(os.time()))
+            return game:HttpGet(rawUrl(REPO_SC, BRANCH_SC,
+            "src/" .. moduleName .. ".lua") .. "?t=" .. tostring(os.time()))
         end)
         if okHttp and remoteContent and #remoteContent > 0 then
             local fn = loadstring(remoteContent)
