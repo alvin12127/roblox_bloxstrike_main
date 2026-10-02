@@ -484,11 +484,47 @@ local function drawWorldBomb(camera, inst, color, label)
     local width = 26
 
     local viewport = camera.ViewportSize
-    if (screen.X < -width) or (screen.Y < -width)
-        or (screen.X > viewport.X + width) or (screen.Y > viewport.Y + width) then
-        stateLog("draw failed - '" .. tostring(inst.Name) .. "' is off screen at ("
-            .. tostring(math.floor(screen.X)) .. ", " .. tostring(math.floor(screen.Y)) .. ")")
-        hideItem("World")
+
+    -- Off screen: instead of hiding the marker, clamp an arrow to the screen
+    -- edge so the bomb can still be located. The previous behaviour logged every
+    -- frame and showed nothing, which looked like "the ESP only works while
+    -- somebody is holding it in front of you".
+    if (screen.X < 0) or (screen.Y < 0)
+        or (screen.X > viewport.X) or (screen.Y > viewport.Y) then
+        local cx = viewport.X / 2
+        local cy = viewport.Y / 2
+        local dx = screen.X - cx
+        local dy = screen.Y - cy
+
+        -- push the arrow out to the edge of the screen along the same direction
+        local margin = 34
+        local halfW = (viewport.X / 2) - margin
+        local halfH = (viewport.Y / 2) - margin
+        local scale = math.huge
+        if math.abs(dx) > 0.0001 then scale = math.min(scale, halfW / math.abs(dx)) end
+        if math.abs(dy) > 0.0001 then scale = math.min(scale, halfH / math.abs(dy)) end
+        if scale == math.huge then scale = 1 end
+
+        local ax = cx + (dx * scale)
+        local ay = cy + (dy * scale)
+
+        local dist = math.floor(screen.Z)
+
+        pcall(function()
+            item.Box.Position = Vector2.new(ax - (width / 2), ay - (width / 2))
+            item.Box.Size = Vector2.new(width, width)
+            item.Box.Color = color
+            item.Box.Visible = true
+
+            item.Label.Text = string.format("%s  %dm", tostring(label), dist)
+            item.Label.Position = Vector2.new(ax, ay - (width / 2) - 16)
+            item.Label.Color = color
+            item.Label.Visible = true
+        end)
+
+        stateLog("bomb is off screen - showing edge marker at ("
+            .. tostring(math.floor(screen.X)) .. ", " .. tostring(math.floor(screen.Y))
+            .. ") Z=" .. tostring(dist))
         return
     end
 
@@ -619,8 +655,31 @@ local function update()
     end)
 
     if worldBomb then
+        -- The label must describe where the bomb actually is, not just whether a
+        -- planted flag is set. Deriving it from `planted` alone reported
+        -- "C4 Dropped" while an enemy was still carrying it.
+        local holderName = nil
+        pcall(function()
+            local chars = Workspace:FindFirstChild("Characters")
+            if chars then
+                for _, c in ipairs(chars:GetChildren()) do
+                    if c:IsA("Model") and worldBomb:IsDescendantOf(c) then
+                        local pl = Players:FindFirstChild(c.Name)
+                        holderName = (pl and pl.DisplayName) or c.Name
+                        break
+                    end
+                end
+            end
+        end)
+
         local label
-        if planted then
+        if holderName then
+            if planted then
+                label = string.format("C4 Planted  %.0fs", timer)
+            else
+                label = "C4 Carrier: " .. tostring(holderName)
+            end
+        elseif planted then
             label = string.format("C4 Planted  %.0fs", timer)
         else
             label = "C4 Dropped"

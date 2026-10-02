@@ -314,8 +314,24 @@ reportInit("SkinChanger", function()
     -- from a hardcoded path that does not exist in this build, which left every
     -- 3D preview rendering as an empty box.
     _G.__bloxstrikeSkinsLib = scSkinsLib
-    pcall(warn, "[Bloxstrike] SkinsLib resolved: "
-        .. tostring(scSkinsLib and scSkinsLib.Resolved))
+
+    -- Draw the resolver result on screen so a mismatch is visible even when the
+    -- executor console is filtered.
+    do
+        local line = (scSkinsLib and scSkinsLib.Report)
+            and scSkinsLib:Report() or "SkinsLib missing"
+        pcall(warn, "[Bloxstrike] " .. tostring(line))
+        pcall(function()
+            local label = Drawing.new("Text")
+            label.Size = 13
+            label.Outline = true
+            label.Color = Color3.fromRGB(255, 230, 120)
+            label.Position = Vector2.new(16, 260)
+            label.Visible = true
+            label.Text = string.sub(tostring(line), 1, 110)
+            _G.__bloxstrikeSkinsInfo = label
+        end)
+    end
 
     scAPI.bind(scConfig, scDatabase, scEngine, scKnifeCatalog, scGunCatalog)
     if scAPI.bindGloveCatalog then

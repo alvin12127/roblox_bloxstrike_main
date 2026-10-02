@@ -54,6 +54,10 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
     })
     UIManager.Window = Window
 
+    -- The skin catalog needs room for a 4-wide card grid plus the toolbars.
+    -- arvn's default window clipped the third row and squeezed the hint text.
+    pcall(function() Window:SetSize(760, 560) end)
+
     local Main = Window:Group("Main")
 
     -- ==========================================
@@ -908,7 +912,16 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
         { key = "GloveCatalog", label = "Gloves" },
     }
 
-    local PANEL_HEIGHT = 420
+    -- Catalog grid area.
+    --
+    -- The catalog draws its own header bar ("Knife Models | Left-Click: ..."),
+    -- which sat under this tab's toolbar and made the two overlap. That header is
+    -- hidden after the catalog builds, and the panel starts at the grid instead.
+    --
+    -- The height is generous because a fixed 420 clipped the third card row.
+    local PANEL_HEIGHT = 470
+    local TOOLBAR_H = 32
+    local ACTION_H = 30
     local skinsState = { holder = nil, built = false }
 
     -- Catalogs are built lazily, so refresh must tolerate one that has not been
@@ -950,7 +963,7 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
         -- ---------- toolbar ----------
         local bar = SkinShim:Create("Frame", {
             BackgroundTransparency = 1,
-            Size = UDim2.new(1, 0, 0, 30),
+            Size = UDim2.new(1, 0, 0, TOOLBAR_H),
             ZIndex = 2,
             Parent = holder
         })
@@ -958,6 +971,7 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
         SkinShim:Create("UIListLayout", {
             FillDirection = Enum.FillDirection.Horizontal,
             HorizontalAlignment = Enum.HorizontalAlignment.Left,
+            VerticalAlignment = Enum.VerticalAlignment.Center,
             Padding = UDim.new(0, 6),
             SortOrder = Enum.SortOrder.LayoutOrder,
             Parent = bar
@@ -966,6 +980,47 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
         local navButtons = {}
         local panels = {}
         local built = {}
+
+        -- The catalog renders its own header row and offsets the grid below it.
+        -- That header duplicates this tab's toolbar, so it is hidden and the grid
+        -- is moved up to reclaim the space. Without this the two label rows
+        -- overlap and the grid starts half a row too low.
+        local function tidyCatalogLayout(panel)
+            if not panel then return end
+
+            pcall(function()
+                for _, d in ipairs(panel:GetDescendants()) do
+                    -- header bars: short wide frames directly holding a title
+                    if d:IsA("Frame") then
+                        local h = d.AbsoluteSize.Y
+                        if h and h <= 30 and d.AbsoluteSize.X > (panel.AbsoluteSize.X * 0.8) then
+                            d.Visible = false
+                        end
+                    end
+                end
+            end)
+
+            -- the grid's ScrollingFrame normally starts at Y=32 (below the
+            -- header); move it to the top now that the header is gone
+            pcall(function()
+                for _, d in ipairs(panel:GetDescendants()) do
+                    if d:IsA("ScrollingFrame") then
+                        d.Position = UDim2.new(0, 0, 0, 0)
+                        d.Size = UDim2.new(1, 0, 1, 0)
+                    end
+                end
+            end)
+
+            -- and let the container fill the panel
+            pcall(function()
+                for _, d in ipairs(panel:GetChildren()) do
+                    if d:IsA("Frame") then
+                        d.Position = UDim2.new(0, 0, 0, 0)
+                        d.Size = UDim2.new(1, 0, 1, 0)
+                    end
+                end
+            end)
+        end
 
         -- Build one catalog on demand.
         --
@@ -1012,6 +1067,7 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
             local ok, err = pcall(catalog.init, fakeTab, scConfig, scAPI, SkinShim, scDb)
             if ok then
                 built[index] = true
+                tidyCatalogLayout(panel)
             else
                 warn("[Bloxstrike] " .. entry.key .. " failed to build: " .. tostring(err))
                 SkinShim:CreateLabel({
@@ -1049,7 +1105,7 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
 
             panels[index] = SkinShim:Create("Frame", {
                 BackgroundTransparency = 1,
-                Position = UDim2.new(0, 0, 0, 34),
+                Position = UDim2.new(0, 0, 0, TOOLBAR_H + ACTION_H + 6),
                 Size = UDim2.new(1, 0, 0, PANEL_HEIGHT),
                 Visible = (index == 1),
                 ZIndex = 2,
@@ -1085,8 +1141,8 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
 
         local actionBar = SkinShim:Create("Frame", {
             BackgroundTransparency = 1,
-            Position = UDim2.new(0, 0, 0, 34),
-            Size = UDim2.new(1, 0, 0, 28),
+            Position = UDim2.new(0, 0, 0, TOOLBAR_H),
+            Size = UDim2.new(1, 0, 0, ACTION_H),
             ZIndex = 2,
             Parent = holder
         })
@@ -1094,6 +1150,7 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
         SkinShim:Create("UIListLayout", {
             FillDirection = Enum.FillDirection.Horizontal,
             HorizontalAlignment = Enum.HorizontalAlignment.Left,
+            VerticalAlignment = Enum.VerticalAlignment.Center,
             Padding = UDim.new(0, 6),
             SortOrder = Enum.SortOrder.LayoutOrder,
             Parent = actionBar
