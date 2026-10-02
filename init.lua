@@ -123,20 +123,26 @@ local Chams            = import("Chams")
 local InstantReload    = import("InstantReload")
 local UIManager        = import("UIManager")
 
--- Load arvn UI library
--- arvn UI library. Without it there is no menu, so load it before anything
--- that expects Config/UIManager to be usable.
+-- Load the arvn UI library. Without it there is no menu, so it must be available
+-- before anything that touches Config or UIManager.
+--
+-- The pcall results must be captured in order: okArvn is the success flag and
+-- arvnResult is the returned library table. Discarding the first return value
+-- here made every load look like a failure.
 local Arvn = nil
 do
-    local okArvn, arvnErr = pcall(function()
+    local okArvn, arvnResult = pcall(function()
         local src = game:HttpGet("https://raw.githubusercontent.com/koteqjjjj/arvn/main/arvn.lua")
         local chunk = loadstring(src)
         if not chunk then error("loadstring returned nil") end
         return chunk()
     end)
-    Arvn = (okArvn and type(Arvn) == "table") and Arvn or nil
-    if not Arvn then
-        error("[Bloxstrike] Failed to load the arvn UI library: " .. tostring(arvnErr))
+
+    if okArvn and type(arvnResult) == "table" then
+        Arvn = arvnResult
+    else
+        error("[Bloxstrike] Failed to load the arvn UI library: "
+            .. tostring(arvnResult))
     end
 end
 
