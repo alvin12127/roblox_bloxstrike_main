@@ -191,50 +191,32 @@ local BOMB_MODEL_NAMES = {
     ["bombholster"] = true,
 }
 
--- The C4 rig lives under a folder named "<Player>_WeaponAttachments".
-local function isWeaponAttachmentsName(name)
-    if type(name) ~= "string" then return false end
-    return name:lower():find("_weaponattachments", 1, true) == 1
-        or name:lower():find("weaponattachments", 1, true) ~= nil
+-- The C4 rig lives under a folder named after its owner. The dump shows
+-- "<Player>_WeaponAttachments", but the suffix has been spelled differently
+-- across game versions and the weapon model itself is also named
+-- "<Player>_Weapon", so only the "_Weapon" part is treated as fixed. Matching the
+-- suffix exactly was one reason the bomb went unfindable the moment the local
+-- player picked it up.
+--
+-- Returns the owner name, or nil if the folder is not an attachment folder.
+local function ownerNameFromWeaponFolder(name)
+    if type(name) ~= "string" then return nil end
+    local lower = name:lower()
+
+    local owner = lower:match("^(.-)_weaponattachments$")
+        or lower:match("^(.-)%.weaponattachments$")
+        or lower:match("^(.-)_weaponattachment$")
+        or lower:match("^(.-)_weapon$")
+    if not owner or owner == "" then return nil end
+
+    -- "WeaponAttachments" on its own belongs to a rig, not to a player.
+    if owner:find("weapon", 1, true) then return nil end
+    return owner
 end
 
 local function isBombName(name)
     if type(name) ~= "string" then return false end
     return BOMB_MODEL_NAMES[name:lower()] == true
-end
-
--- Find a BombHolster anywhere under a node, returning both the holster and the
--- owning character model when one is found.
-local function findHolsterUnder(node, maxDepth)
-    if not node then return nil, nil end
-    maxDepth = maxDepth or 8
-
-    local found = nil
-    pcall(function()
-        for _, d in ipairs(node:GetDescendants()) do
-            if found then break end
-            if d:IsA("Model") and isBombName(d.Name) then
-                found = d
-            end
-        end
-    end)
-    if not found then return nil, nil end
-
-    -- walk up to see whether we are inside a character
-    local owner = nil
-    local chars = Workspace:FindFirstChild("Characters")
-    if chars then
-        pcall(function()
-            for _, c in ipairs(chars:GetChildren()) do
-                if c:IsA("Model") and found:IsDescendantOf(c) then
-                    owner = c
-                    break
-                end
-            end
-        end)
-    end
-
-    return found, owner
 end
 
 -- The C4 is a single "BombHolster" Model. From an instance dump of the live
@@ -275,26 +257,37 @@ end
 -- readout showed "carrier=nil" with "via=sticky" while somebody was visibly
 -- holding the C4, which is the same thing as "branch 1 never fires".
 --
--- The robust facts, taken from an instance dump of a live round:
+-- The real layout, from an instance dump:
 --
 --   Workspace
---     Characters                            (Folder, level 1)
---       Terrorists / Counter-Terrorists ...  (Folder, level 2)
---       <Player>                             (Model,  level 2)  <- the rig
---       <Player>_WeaponAttachments           (Folder, level 2)  <- the bomb rig
---         <Player>_Weapon / T Knife / Interactables / BombHolster
+--     Characters                            (Folder)
+--       <Player>                             (Model - the rig)
+--       <Player>_WeaponAttachments           (Folder)
+--         <Player>_Weapon                    (Model)
+--           T Knife                          (Model)
+--             Interactables                  (Folder)
+--               BombHolster                  (Model, PP "Body")
 --
--- The one relationship that never changes is the one that matters: the rig and
--- the attachment folder are SIBLINGS. So the rig is looked up as a sibling of
--- the folder we already found, and no global anchor, attribute check or Humanoid
--- lookup is needed to reach it.
+-- One pass, one index.
+--
+-- The previous version walked the folder tree once per candidate, and inside
+-- each walk it re-enumerated every folder under Characters looking for the rig.
+-- With five attachment folders that is five full re-walks of the same tree -
+-- quadratic, and it is why picking the C4 up made the game stutter: the scan
+-- runs from the render path and the cost grew with the number of players holding
+-- weapons. buildIndex() walks once and records both halves of the answer, so the
+-- scan is linear and independent of how many rigs are in the round.
+local BOMB_TREE_DEPTH = 5
 
+-- Liveness. The rigs expose @Dead / @Health attributes; there is no Humanoid on
+-- a character model at all, so the attribute is the only reliable signal. The
+-- Humanoid branch below is kept purely as a fallback for a build that adds one.
+--
+-- A corpse keeps its attachment folder, so without this the ESP kept reporting a
+-- dead body as the carrier and the bomb on the floor was never shown.
 local function isAlive(char)
     if not char then return false end
 
-    -- The rigs expose @Dead / @Health. There is no Humanoid on a character model
-    -- at all, so the attribute is the only reliable signal; the Humanoid branch
-    -- is only a fallback for a build that adds one.
     local dead, health = nil, nil
     pcall(function() dead = char:GetAttribute("Dead") end)
     pcall(function() health = tonumber(char:GetAttribute("Health")) end)
@@ -315,23 +308,9 @@ local function isAlive(char)
     return true
 end
 
-local function ownerNameFromAttachment(name)
-    if type(name) ~= "string" then return nil end
-    return name:match("^(.-)_WeaponAttachments$")
-        or name:match("^(.-)%.WeaponAttachments$")
-        or name:match("^(.-)_WeaponAttachment$")
-end
-
--- Visit every FOLDER under `root`, up to `maxDepth`, without ever descending
--- into a Model.
---
--- This is the single most important helper in the file. Walking the whole
--- Characters subtree with GetDescendants() visits a dozen rigs of several
--- hundred BaseParts each, and every one of those calls sat inside a pcall - so
--- when the executor errored or truncated the walk the failure was completely
--- silent and the carrier just came back nil. Rigs are Models, so a Folder-only
--- walk keeps the cost proportional to the folder layout instead of to the
--- hundreds of thousands of instances in the scene.
+-- Visit every FOLDER under `root`, up to `maxDepth`, without ever descending into
+-- a Model. Rigs are Models holding several hundred BaseParts each, so a walk that
+-- entered them walked hundreds of thousands of instances.
 local function eachSubFolder(root, maxDepth, fn)
     if not root then return end
 
@@ -350,60 +329,100 @@ local function eachSubFolder(root, maxDepth, fn)
     walk(root, 0)
 end
 
--- Locate the rig that belongs to an attachment folder.
+-- Find the bomb under `node`. Matched by name OR by shape, because the name is
+-- not stable - the game renames or replaces the holster when it changes hands.
 --
--- Two layouts exist in the wild and which one is live has changed between game
--- versions, so both are handled and neither is assumed:
---
---   Characters
---     <Player>                       <- rig and folder are SIBLINGS
---     <Player>_WeaponAttachments
---
---   Characters
---     Terrorists
---       <Player>                     <- rig one level down, inside a team folder
---     <Player>_WeaponAttachments
---
--- The sibling case is tried first because it is a single shallow call; the
--- folder-only descent is the fallback and costs almost nothing because it never
--- enters a Model.
-local function findRigNearAttachment(folder, owner)
-    if not folder then return nil end
-    local target = tostring(owner):lower()
+-- This is a bounded GetChildren walk with an early exit rather than
+-- GetDescendants(), which allocates a table covering the whole subtree before
+-- the first check even runs.
+local function findHolsterUnder(node)
+    if not node then return nil end
 
-    local parent = nil
-    pcall(function() parent = folder.Parent end)
+    local found = nil
+    local visited = 0
 
-    if parent then
-        -- Assigned to an upvalue, not returned: a `return` inside pcall only
-        -- exits the anonymous function and the value is silently lost. That
-        -- exact mistake is what made the carrier resolve to nil in game.
-        local sibling = nil
+    local function walk(inst, depth)
+        if found or depth > BOMB_TREE_DEPTH then return end
+        visited = visited + 1
+        if visited > 300 then return end
+
         pcall(function()
-            for _, sib in ipairs(parent:GetChildren()) do
-                if sib:IsA("Model") and (tostring(sib.Name):lower() == target) then
-                    sibling = sib
-                    break
-                end
+            if inst:IsA("Model") and (isBombName(inst.Name) or inst.Name == "BombHolster") then
+                found = inst
+                return
+            end
+            for _, child in ipairs(inst:GetChildren()) do
+                walk(child, depth + 1)
+                if found then return end
             end
         end)
-        if sibling then return sibling end
     end
 
-    local deep = nil
-    eachSubFolder(parent, 3, function(f)
-        if deep then return end
+    pcall(function() walk(node, 0) end)
+    return found
+end
+
+-- One folder-only pass that records, in a single traversal:
+--   index.owners[name] = the "<Player>_Weapon..." folder
+--   index.rigs[name]   = the character Model of that name
+--
+-- Models are indexed only when they are a direct child of a visited folder, so a
+-- rig's own sub-models cannot be mistaken for a player.
+local function buildIndex()
+    local index = { owners = {}, rigs = {} }
+
+    local function consider(inst)
+        if inst:IsA("Folder") then
+            local owner = ownerNameFromWeaponFolder(inst.Name)
+            if owner and (not index.owners[owner]) then
+                index.owners[owner] = inst
+            end
+        elseif inst:IsA("Model") then
+            local key = tostring(inst.Name):lower()
+            if (not index.rigs[key]) then index.rigs[key] = inst end
+        end
+    end
+
+    local function walk(node, depth)
+        if depth > 4 then return end
         pcall(function()
-            for _, child in ipairs(f:GetChildren()) do
-                if child:IsA("Model") and (tostring(child.Name):lower() == target) then
-                    deep = child
-                    return
-                end
+            for _, child in ipairs(node:GetChildren()) do
+                consider(child)
+                if child:IsA("Folder") then walk(child, depth + 1) end
             end
         end)
-    end)
+    end
 
-    return deep
+    pcall(function() walk(Workspace, 0) end)
+    return index
+end
+
+-- The index only changes when someone dies, spawns or picks the bomb up, which
+-- is orders of magnitude rarer than the render rate. Rebuilding it every scan
+-- interval is what caused the stutter, so it is cached.
+--
+-- The TTL alone is not enough, and the reason is exactly the reported bug: the
+-- moment a player picks the C4 up, a brand new "<Player>_WeaponAttachments"
+-- folder appears, and a stale index cannot see it - the bomb stayed unfindable
+-- for as long as the cache lived. So the cache is also dropped the moment a scan
+-- finds no holster at all, which costs one extra walk and makes the pickup
+-- visible on the very next scan.
+local indexCache = { value = nil, builtAt = 0 }
+local INDEX_TTL = 0.75
+
+local function getIndex()
+    local now = os.clock()
+    if indexCache.value and ((now - indexCache.builtAt) < INDEX_TTL) then
+        return indexCache.value
+    end
+    indexCache.value = buildIndex()
+    indexCache.builtAt = now
+    return indexCache.value
+end
+
+local function dropIndex()
+    indexCache.value = nil
+    indexCache.builtAt = 0
 end
 
 -- Independent liveness check that does not depend on a rig being locatable at
@@ -486,86 +505,76 @@ end
 
 -- Resolve the bomb and, if it is being carried, by whom.
 --
--- Returns: holster, holderName, holderCharacter, source
---
--- holderName is only returned when the bomb is genuinely being carried RIGHT
--- NOW. A corpse keeps its "<Name>_WeaponAttachments" folder, so the folder name
--- alone is not proof of carriage: if the named owner is dead the bomb has been
--- dropped and is reported as loose.
+-- Returns: holster, holderName, holderCharacter
 local function scanForBomb()
+    local index = getIndex()
 
-    -- 1. A BombHolster inside a "<Name>_WeaponAttachments" folder.
+    -- 1. A bomb inside a "<Player>_Weapon..." folder.
     --
-    --    The walk starts at Workspace, not at Characters: the folder's exact
-    --    ancestor has changed between game versions and getting that wrong made
-    --    this branch a silent no-op.
-    --
-    --    Candidates are scored rather than taken first-come, because folder
-    --    order is arbitrary and a leftover attachment folder must never beat the
-    --    actual carrier.
+    --    Candidates are scored rather than taken first-come, because folder order
+    --    is arbitrary and a leftover attachment folder must never beat the actual
+    --    carrier.
     local bestHolster, bestOwner, bestChar, bestScore
 
-    eachSubFolder(Workspace, 3, function(f)
-        if bestHolster then return end
-        if not isWeaponAttachmentsName(f.Name) then return end
+    for owner, folder in pairs(index.owners) do
+        local holster = findHolsterUnder(folder)
+        if holster then
+            local rig = index.rigs[owner:lower()]
+            local name = nil
+            pcall(function() name = rig and rig.Name end)
 
-        local owner = ownerNameFromAttachment(f.Name)
-        if not owner then return end
+            -- NOTE: written the long way on purpose. `rig and isAlive(rig) or nil`
+            -- turns a FALSE into nil, which falls through to the Player check and
+            -- reports a dead body as the carrier.
+            local alive = nil
+            if rig then alive = isAlive(rig) end
 
-        local holster = findHolsterUnder(f)
-        if not holster then return end
+            -- Score, highest wins:
+            --   3  rig found and alive                   -> carried
+            --   2  no rig found, but a Player row exists -> carried
+            --   0  rig found and DEAD                    -> dropped
+            --   1  nothing known                         -> dropped
+            --
+            -- Score 0 matters because a dead player keeps their row in Players, so
+            -- the Player fallback alone would keep calling a corpse the carrier.
+            local score
+            if alive == true then
+                score = 3
+            elseif alive == false then
+                score = 0
+            elseif playerLooksPresent(owner) then
+                score = 2
+            else
+                score = 1
+            end
 
-        -- The rig is a sibling of the attachment folder, or one level below it in a
-        -- per-team Folder. Both layouts are handled by findRigNearAttachment, so
-        -- no global anchor and no Humanoid / @CharacterName lookup is needed.
-        local rig = findRigNearAttachment(f, owner)
-
-        -- NOTE: written the long way on purpose. `rig and isAlive(rig) or nil`
-        -- turns a FALSE into nil, which then falls through to the Player check
-        -- and reports a dead body as the carrier - the exact bug this replaced.
-        local alive = nil
-        if rig then alive = isAlive(rig) end
-
-        -- Score, highest wins:
-        --   3  rig found and alive                      -> carried
-        --   2  no rig found, but a Player row exists    -> carried
-        --   0  rig found and DEAD                       -> dropped
-        --   1  nothing known                            -> dropped
-        --
-        -- Score 0 matters because a dead player keeps their row in Players, so
-        -- the Player fallback on its own would keep calling a corpse the carrier.
-        local score
-        if alive == true then
-            score = 3
-        elseif alive == false then
-            score = 0
-        elseif playerLooksPresent(owner) then
-            score = 2
-        else
-            score = 1
+            if (not bestScore) or (score > bestScore) then
+                bestScore = score
+                bestHolster = holster
+                bestOwner = owner
+                bestChar = rig
+            end
         end
-
-        if (not bestScore) or (score > bestScore) then
-            bestScore = score
-            bestHolster = holster
-            bestOwner = owner
-            bestChar = rig
-        end
-    end)
+    end
 
     if bestHolster then
         rememberHolster(bestHolster)
         -- Only a living owner counts as "carried". A dead or unknown owner means
         -- the folder is left over and the bomb has been dropped.
         if bestScore >= 2 then
-            return bestHolster, bestOwner, bestChar, "carried"
+            return bestHolster, bestOwner, bestChar
         end
+    else
+        -- No holster in any attachment folder. Either the bomb is not being
+        -- carried, or a carrier just appeared and the index predates it. Drop
+        -- the cache so the next scan is not blind to it.
+        dropIndex()
     end
 
     -- 2. The instance we already know about, still parented somewhere. This
     --    covers a plain reparent, including a rename.
     if stickyHolster and stickyHolster.Parent then
-        return stickyHolster, nil, nil, "sticky"
+        return stickyHolster, nil, nil
     end
     stickyHolster = nil
 
@@ -595,7 +604,7 @@ local function scanForBomb()
 
     if byName then
         rememberHolster(byName)
-        return byName, nil, nil, "name"
+        return byName, nil, nil
     end
 
     -- 4. Shape match. This is what actually finds a dropped or planted bomb,
@@ -603,10 +612,10 @@ local function scanForBomb()
     local byShape = findBombByShape(Workspace, 6)
     if byShape then
         rememberHolster(byShape)
-        return byShape, nil, nil, "shape"
+        return byShape, nil, nil
     end
 
-    return nil, nil, nil, "none"
+    return nil, nil, nil
 end
 
 -- ==========================================================
