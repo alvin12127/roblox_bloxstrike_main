@@ -729,20 +729,40 @@ end
 -- The instance identity is therefore no longer used to decide a new round; the
 -- latch is released only when the bomb disappears for a while, when somebody
 -- carries it again, or when the game says the plant ended.
-local ROUND_RESET_GRACE = 1.5
+-- The fuse length. Configured rather than hard-coded because the instance dump
+-- exposes no bomb timer constant anywhere; 40s is the value this map is expected
+-- to use. The countdown is measured from when the ESP first sees the plant, so
+-- the displayed value starts within one scan interval of the real one and then
+-- decreases on its own, every frame, with no input from the game.
 local DEFAULT_BOMB_TIME = 40
+local ROUND_RESET_GRACE = 1.5
+
+local function bombTime()
+    local configured = nil
+    pcall(function() configured = tonumber(storedConfig and storedConfig.C4_BOMB_TIME) end)
+    if configured and configured > 0 and configured < 600 then return configured end
+    return DEFAULT_BOMB_TIME
+end
 
 local plantedState = {
     latched = false,
     latchedAt = nil,
     hookInstalled = false,
     missingSince = nil,
+    -- When the countdown started for the bomb currently on the ground. Anchored
+    -- here rather than read from the game, because every game-provided value was
+    -- measured to be wrong: the Screen reads 67 for a planted bomb AND for a
+    -- dropped one, and there is no @BombTimer attribute to read.
+    countdownSince = nil,
+    countdownBomb = nil,
 }
 
 local function releasePlanted()
     plantedState.latched = false
     plantedState.latchedAt = nil
     plantedState.missingSince = nil
+    plantedState.countdownSince = nil
+    plantedState.countdownBomb = nil
 end
 
 -- The remotes live at ReplicatedStorage/NetworkRemotes/C4/<name>. Three
@@ -1070,8 +1090,10 @@ local function plantedInfo(bombInstance, position)
     installPlantedHook()
     plantedState.missingSince = nil
 
-    -- The Screen supplies the COUNTDOWN, never the decision. It reads a number
-    -- for a dropped bomb too, so it cannot distinguish the two states.
+    -- The Screen is read for diagnostics ONLY. It is not a countdown: in game it
+    -- reads 67 for a planted bomb and 67 for one lying on the floor, which is
+    -- neither the fuse length nor a value that decreases. Showing it produced a
+    -- nonsensical "Planted 67s" that never moved.
     local screenTimer = readScreenTimer(bombInstance)
     probe.screenTimer = screenTimer
 
@@ -1093,18 +1115,22 @@ local function plantedInfo(bombInstance, position)
     end
 
     if signal == "none" then
+        -- Not planted: drop the countdown anchor so the next plant starts fresh.
+        plantedState.countdownSince = nil
+        plantedState.countdownBomb = nil
         return false, 0, nil, signal
     end
 
-    -- Timer: the Screen first, then a countdown from the latch moment.
-    local timer = screenTimer or 0
-    if timer <= 0 then
-        if plantedState.latchedAt then
-            timer = math.max(0, DEFAULT_BOMB_TIME - (os.clock() - plantedState.latchedAt))
-        else
-            timer = DEFAULT_BOMB_TIME
-        end
+    -- Anchor the countdown the first time this bomb is seen planted, and re-anchor
+    -- if the bomb instance itself changes (the plant replaces the holster).
+    if plantedState.countdownSince == nil
+        or plantedState.countdownBomb ~= bombInstance then
+        plantedState.countdownSince = os.clock()
+        plantedState.countdownBomb = bombInstance
     end
+
+    local elapsed = os.clock() - plantedState.countdownSince
+    local timer = math.max(0, bombTime() - elapsed)
 
     return true, timer, site, signal
 end

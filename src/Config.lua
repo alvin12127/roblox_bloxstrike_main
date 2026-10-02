@@ -45,6 +45,14 @@ local Config = {
     BOX_ESP_ENABLED = true,
     BOX_ESP_CORNERS_ONLY = true,
     C4_ESP_ENABLED = true,
+    -- Fuse length in seconds. The countdown is measured from the moment the ESP
+    -- first sees the bomb planted, so it begins within one scan interval (0.35s)
+    -- of the real plant and then ticks down on its own.
+    --
+    -- The C4's own Screen is deliberately NOT used for this: measured in game it
+    -- reads 67 whether the bomb is planted or merely lying on the floor, which is
+    -- neither the fuse length nor a countdown.
+    C4_BOMB_TIME = 40,
     GRENADE_ESP_ENABLED = false,
     GRENADE_ESP_BOX_SIZE = 26,
     GRENADE_ESP_MAX_DISTANCE = 800,
@@ -236,6 +244,14 @@ local DEFAULT_VALUES = {
     BOX_ESP_ENABLED = true,
     BOX_ESP_CORNERS_ONLY = true,
     C4_ESP_ENABLED = true,
+    -- Fuse length in seconds. The countdown is measured from the moment the ESP
+    -- first sees the bomb planted, so it begins within one scan interval (0.35s)
+    -- of the real plant and then ticks down on its own.
+    --
+    -- The C4's own Screen is deliberately NOT used for this: measured in game it
+    -- reads 67 whether the bomb is planted or merely lying on the floor, which is
+    -- neither the fuse length nor a countdown.
+    C4_BOMB_TIME = 40,
     GRENADE_ESP_ENABLED = false,
     GRENADE_ESP_BOX_SIZE = 26,
     GRENADE_ESP_MAX_DISTANCE = 800,
