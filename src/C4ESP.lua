@@ -33,64 +33,6 @@ local C4ESP = {
 local storedConfig = nil
 
 -- ==========================================================
--- Diagnostics
--- ==========================================================
--- Some executors block Roblox's F9 output entirely, so the executor console
--- APIs are tried first and warn() is only the fallback.
-local function execLog(msg)
-    local line = "[Bloxstrike] C4 ESP: " .. msg
-    local written = false
-
-    pcall(function()
-        if rconsoleprint then rconsoleprint(line .. "\n"); written = true end
-    end)
-    if not written then
-        pcall(function()
-            if consoleprint then consoleprint(line .. "\n"); written = true end
-        end)
-    end
-    if not written then
-        pcall(function()
-            if printconsole then printconsole(line); written = true end
-        end)
-    end
-
-    pcall(function() warn(line) end)
-end
-
--- State-change logger.
---
--- A plain time throttle cannot be used here: the "about to draw" message
--- fires every frame and would consume the whole throttle budget, so every
--- message emitted *inside* the draw function was silently swallowed forever.
--- Logging only when the message text actually changes guarantees the reason
--- the marker is not appearing is always visible.
-local lastState = ""
-local function stateLog(msg)
-    if msg ~= lastState then
-        lastState = msg
-        execLog(msg)
-    end
-end
-
--- On-screen debug readout so the state is visible even when every console is
--- blocked.
-local debugText = nil
-local function ensureDebugLabel()
-    if debugText then return end
-    pcall(function()
-        debugText = Drawing.new("Text")
-        debugText.Size = 16
-        debugText.Center = false
-        debugText.Outline = true
-        debugText.Color = Color3.fromRGB(255, 220, 0)
-        debugText.Position = Vector2.new(16, 150)
-        debugText.Visible = false
-        debugText.Text = ""
-    end)
-end
-
--- ==========================================================
 -- Drawing primitives
 -- ==========================================================
 local function makeItem(key)
@@ -480,13 +422,9 @@ end
 -- covers the common case of a plain reparent; the shape search below is what
 -- covers the replacement.
 local stickyHolster = nil
-local lastOwner = nil
 
-local function rememberHolster(inst, owner)
-    if inst then
-        stickyHolster = inst
-        lastOwner = owner
-    end
+local function rememberHolster(inst)
+    if inst then stickyHolster = inst end
 end
 
 -- Structural signature for the C4. The dump has four occurrences of a part
@@ -546,23 +484,6 @@ local function findBombByShape(root, maxDepth)
     return found
 end
 
--- Diagnostics. The previous version reported only "carrier=nil", which cannot
--- distinguish "the attachment folder was never found" from "the folder was found
--- but its owner was rejected". That ambiguity is exactly what left the carried
--- state broken for several rounds.
-local probe = {
-    attachmentFolders = 0,
-    holstersInFolders = 0,
-    lastOwner = nil,
-    lastOwnerRig = 0,
-    lastOwnerAlive = 0,
-    lastOwnerPlayer = 0,
-    lastScore = 0,
-    stickyAlive = 0,
-    zoneCount = 0,
-    screenTimer = nil,
-}
-
 -- Resolve the bomb and, if it is being carried, by whom.
 --
 -- Returns: holster, holderName, holderCharacter, source
@@ -572,8 +493,6 @@ local probe = {
 -- alone is not proof of carriage: if the named owner is dead the bomb has been
 -- dropped and is reported as loose.
 local function scanForBomb()
-    probe.attachmentFolders = 0
-    probe.holstersInFolders = 0
 
     -- 1. A BombHolster inside a "<Name>_WeaponAttachments" folder.
     --
@@ -593,14 +512,10 @@ local function scanForBomb()
         local owner = ownerNameFromAttachment(f.Name)
         if not owner then return end
 
-        probe.attachmentFolders = probe.attachmentFolders + 1
-
         local holster = findHolsterUnder(f)
         if not holster then return end
 
-        probe.holstersInFolders = probe.holstersInFolders + 1
-
-        -- The rig is a sibling of the attachment folder, or one level below it inside a
+        -- The rig is a sibling of the attachment folder, or one level below it in a
         -- per-team Folder. Both layouts are handled by findRigNearAttachment, so
         -- no global anchor and no Humanoid / @CharacterName lookup is needed.
         local rig = findRigNearAttachment(f, owner)
@@ -638,14 +553,8 @@ local function scanForBomb()
         end
     end)
 
-    probe.lastOwner = bestOwner
-    probe.lastScore = bestScore or -1
-    probe.lastOwnerRig = bestChar and 1 or 0
-    probe.lastOwnerAlive = (bestChar and isAlive(bestChar)) and 1 or 0
-    probe.lastOwnerPlayer = (bestOwner and playerLooksPresent(bestOwner)) and 1 or 0
-
     if bestHolster then
-        rememberHolster(bestHolster, bestOwner)
+        rememberHolster(bestHolster)
         -- Only a living owner counts as "carried". A dead or unknown owner means
         -- the folder is left over and the bomb has been dropped.
         if bestScore >= 2 then
@@ -656,7 +565,6 @@ local function scanForBomb()
     -- 2. The instance we already know about, still parented somewhere. This
     --    covers a plain reparent, including a rename.
     if stickyHolster and stickyHolster.Parent then
-        probe.stickyAlive = 1
         return stickyHolster, nil, nil, "sticky"
     end
     stickyHolster = nil
@@ -686,7 +594,7 @@ local function scanForBomb()
     end)
 
     if byName then
-        rememberHolster(byName, nil)
+        rememberHolster(byName)
         return byName, nil, nil, "name"
     end
 
@@ -694,7 +602,7 @@ local function scanForBomb()
     --    because by then the model has been replaced and renamed.
     local byShape = findBombByShape(Workspace, 6)
     if byShape then
-        rememberHolster(byShape, nil)
+        rememberHolster(byShape)
         return byShape, nil, nil, "shape"
     end
 
@@ -833,79 +741,6 @@ local function installPlantedHook()
     end)
 end
 
--- The C4 has a Screen part with a SurfaceGui whose TextLabel shows the countdown
--- once it is planted. Read at runtime; the instance dump does not record GUI text
--- so this could not be confirmed offline, but it costs nothing to try and it
--- yields the real timer instead of a guess.
---
--- Every TextLabel on the screen is examined and the first one that parses as a
--- clock wins. Taking the first label unconditionally was wrong: the C4 screen
--- carries more than one, and picking a non-numeric one silently yielded nil,
--- which is exactly the "planted=false with no explanation" case.
-local function parseClock(text)
-    if type(text) ~= "string" then return nil end
-
-    local trimmed = text:match("^%s*(%S+)%s*$")
-    if not trimmed then return nil end
-
-    -- "0:38" / "1:05" -> seconds
-    local m, s = trimmed:match("^(%d+):(%d%d)$")
-    if m then return (tonumber(m) * 60) + tonumber(s) end
-
-    -- Plain digits, with or without a decimal point ("38", "38.4").
-    local n = tonumber(trimmed)
-    if n then
-        if n > 100 then return nil end      -- too large to be a clock
-        return n
-    end
-
-    return nil
-end
-
-local function readScreenTimer(inst)
-    if not inst then return nil end
-
-    -- The Screen may sit on the bomb model or on an ancestor of it, so both are
-    -- consulted. The shape finder returns the inner "Weapon" model, which is
-    -- where the dump shows the Screen living.
-    local candidates = { inst }
-    local up = nil
-    pcall(function() up = inst.Parent end)
-    local guard = 0
-    while up and guard < 3 do
-        table.insert(candidates, up)
-        pcall(function() up = up.Parent end)
-        guard = guard + 1
-    end
-
-    for _, root in ipairs(candidates) do
-        local screens = {}
-        pcall(function()
-            for _, d in ipairs(root:GetDescendants()) do
-                if d.Name == "Screen" and d:IsA("BasePart") then
-                    table.insert(screens, d)
-                end
-            end
-        end)
-
-        for _, screen in ipairs(screens) do
-            local labels = {}
-            pcall(function()
-                for _, g in ipairs(screen:GetDescendants()) do
-                    if g:IsA("TextLabel") then table.insert(labels, g) end
-                end
-            end)
-            for _, g in ipairs(labels) do
-                local t = nil
-                pcall(function() t = g.Text end)
-                local seconds = parseClock(t)
-                if seconds then return seconds end
-            end
-        end
-    end
-
-    return nil
-end
 
 -- Bomb site zones.
 --
@@ -923,7 +758,10 @@ end
 -- it. A search that only descends into Folders cannot find this at all.
 local siteZones = nil
 local siteBoxes = nil
-local siteSearch = { found = 0, nodes = 0, budget = 400 }
+
+-- Node budget for the fallback search below. Without it, a renamed map folder
+-- would send the walk across the whole scene from the RenderStepped path.
+local SITE_SEARCH_BUDGET = 400
 
 -- Locate the "Sites" folder. The known path is tried first because it costs
 -- three property reads, then a bounded search so a future map rename still works
@@ -950,10 +788,11 @@ local function locateSitesFolder()
     -- Bounded fallback. Models are followed as well as Folders, and the number of
     -- GetChildren calls is capped so this can never walk the entire map.
     local found = nil
+    local visited = 0
     local function walk(node, depth)
         if found or depth > 6 then return end
-        siteSearch.nodes = siteSearch.nodes + 1
-        if siteSearch.nodes > siteSearch.budget then return end
+        visited = visited + 1
+        if visited > SITE_SEARCH_BUDGET then return end
 
         pcall(function()
             for _, child in ipairs(node:GetChildren()) do
@@ -978,7 +817,6 @@ local function buildSiteZones()
     siteZones = {}
 
     local sites = locateSitesFolder()
-    siteSearch.found = (sites and 1) or 0
     if not sites then return siteZones end
 
     eachSubFolder(sites, 3, function(zf)
@@ -1015,12 +853,24 @@ end
 -- trigger. The parts sharing a site letter are therefore unioned into one box
 -- and padded, which covers the site volume itself.
 --
--- This is also the only signal that can mean "planted" by itself, because the
--- bomb cannot be planted anywhere else. The Screen text does NOT qualify:
--- measured in game it reads a number both when the bomb is planted and when it
--- is merely lying on the floor, so using it as a signal reported every drop as a
--- plant.
-local SITE_PAD = 45
+-- This is the only signal that can mean "planted" by itself, because the bomb
+-- cannot be planted anywhere else. The Screen text does NOT qualify and its
+-- reader was removed: measured in game it read 67 for a planted bomb AND for one
+-- lying on the floor, so it drove a frozen "Planted 67s" and then produced
+-- false positives for ordinary drops.
+--
+-- The cost of a site-only test is that a bomb dropped INSIDE a site reads as
+-- planted. The padding is therefore kept tight and configurable rather than
+-- generous: at 45 studs the box reached most of a bombsite approach, which is
+-- what turned plain drops into plants.
+local DEFAULT_SITE_PAD = 12
+
+local function sitePad()
+    local configured = nil
+    pcall(function() configured = tonumber(storedConfig and storedConfig.C4_PLANTED_SITE_PAD) end)
+    if configured and configured >= 0 and configured < 200 then return configured end
+    return DEFAULT_SITE_PAD
+end
 
 local function buildSiteBoxes()
     if siteBoxes then return siteBoxes end
@@ -1057,7 +907,7 @@ local function insideBombSite(position)
     if not position then return nil end
 
     for _, box in pairs(buildSiteBoxes()) do
-        local p = SITE_PAD
+        local p = sitePad()
         if position.X >= box.minX - p and position.X <= box.maxX + p
             and position.Y >= box.minY - p and position.Y <= box.maxY + p
             and position.Z >= box.minZ - p and position.Z <= box.maxZ + p then
@@ -1089,16 +939,6 @@ local function plantedInfo(bombInstance, position)
 
     installPlantedHook()
     plantedState.missingSince = nil
-
-    -- The Screen is read for diagnostics ONLY. It is not a countdown: in game it
-    -- reads 67 for a planted bomb and 67 for one lying on the floor, which is
-    -- neither the fuse length nor a value that decreases. Showing it produced a
-    -- nonsensical "Planted 67s" that never moved.
-    local screenTimer = readScreenTimer(bombInstance)
-    probe.screenTimer = screenTimer
-
-    local zones = buildSiteZones()
-    probe.zoneCount = zones and #zones or 0
 
     -- Decision, in order of confidence:
     --   1. the C4 remote fired          exact
@@ -1235,16 +1075,11 @@ end
 
 local function drawWorldBomb(camera, inst, color, label)
     local item = makeItem("World")
-    if not item then
-        stateLog("draw failed - Drawing library unavailable")
-        return
-    end
+    if not item then return end
 
     local position = resolvePosition(inst, 0)
 
     if not position then
-        stateLog("draw failed - no position resolved for '" .. tostring(inst.Name)
-            .. "' (class=" .. tostring(inst.ClassName) .. ")")
         hideItem("World")
         return
     end
@@ -1252,7 +1087,6 @@ local function drawWorldBomb(camera, inst, color, label)
     local okScreen, screen = pcall(camera.WorldToViewportPoint, camera, position)
 
     if (not okScreen) or (not screen) then
-        stateLog("draw failed - WorldToViewportPoint errored on '" .. tostring(inst.Name) .. "'")
         hideItem("World")
         return
     end
@@ -1325,14 +1159,10 @@ local function drawWorldBomb(camera, inst, color, label)
             item.Label.Visible = true
         end)
 
-        stateLog("bomb off screen - edge marker at ("
-            .. tostring(math.floor(ax)) .. ", " .. tostring(math.floor(ay))
-            .. ") dist=" .. tostring(dist) .. "m"
-            .. (behind and " BEHIND" or ""))
         return
     end
 
-    local okDraw = pcall(function()
+    pcall(function()
         if item.Arrow then item.Arrow.Visible = false end
 
         item.Box.Position = Vector2.new(screen.X - (width / 2), screen.Y - (width / 2))
@@ -1353,15 +1183,6 @@ local function drawWorldBomb(camera, inst, color, label)
         item.Label.ZIndex = 3
         item.Label.Visible = true
     end)
-
-    if okDraw then
-        stateLog("drawing '" .. tostring(inst.Name) .. "' at ("
-            .. tostring(math.floor(screen.X)) .. ", " .. tostring(math.floor(screen.Y))
-            .. ") Z=" .. tostring(math.floor(screen.Z)))
-    else
-        stateLog("draw failed - Drawing write error on '" .. tostring(inst.Name) .. "'")
-        hideItem("World")
-    end
 end
 
 -- ==========================================================
@@ -1372,7 +1193,6 @@ local cache = {
     worldBomb = nil,
     carrierName = nil,
     carrier = nil,
-    bombSource = "none",
     worldBombValid = false,
     lastBombScan = 0
 }
@@ -1389,11 +1209,10 @@ local function refreshScan()
         cache.worldBombValid = true
         cache.lastBombScan = now
 
-        local holster, ownerName, char, source = scanForBomb()
+        local holster, ownerName, char = scanForBomb()
         cache.worldBomb = holster
         cache.carrierName = ownerName
         cache.carrier = char
-        cache.bombSource = source or "none"
 
         -- Carrying beats planting: if somebody has the bomb in hand it cannot be
         -- planted, so any plant latch is released here.
@@ -1444,11 +1263,6 @@ local function update()
 
     if not enabled then
         hideAll()
-        ensureDebugLabel()
-        pcall(function()
-            if debugText then debugText.Visible = false end
-        end)
-        lastState = ""
         return
     end
 
@@ -1471,66 +1285,14 @@ local function update()
         hideItem("Carrier")
     end
 
-    local planted, timer, plantedSite, plantSignal = plantedInfo(worldBomb, resolvePosition(worldBomb, 0))
-
-    -- On-screen debug readout (top-left, yellow) so the state is visible even
-    -- when every console is blocked.
-    ensureDebugLabel()
-    pcall(function()
-        if debugText then
-            debugText.Visible = true
-            -- Also report whether the bomb is on screen, clamped to an edge, or
-            -- behind the camera, because that is the single most useful thing
-            -- when the marker looks wrong.
-            local where = "none"
-            if worldBomb then
-                where = "found"
-                local cam = Workspace.CurrentCamera
-                if cam then
-                    local okp, sp = pcall(function()
-                        return cam:WorldToViewportPoint(resolvePosition(worldBomb, 0) or Vector3.new())
-                    end)
-                    if okp and sp and typeof(sp) == "Vector3" then
-                        local vs = cam.ViewportSize
-                        if sp.Z <= 0 then
-                            where = "BEHIND CAMERA (edge arrow)"
-                        elseif sp.X < 0 or sp.Y < 0 or sp.X > vs.X or sp.Y > vs.Y then
-                            where = "OFF-SCREEN (edge arrow)"
-                        else
-                            where = string.format("on screen (%.0f,%.0f)", sp.X, sp.Y)
-                        end
-                    end
-                end
-            end
-            debugText.Text = string.format(
-                "C4 carrier=%s bomb=%s\nvia=%s planted=%s sig=%s site=%s\natt=%d hol=%d own=%s zones=%d\nscore=%d rig=%d alive=%d pl=%d stick=%d scr=%s\nstatus=%s",
-                tostring(carrierName) or "nil",
-                tostring(worldBomb and worldBomb.Name) or "nil",
-                tostring(cache.bombSource) or "none",
-                tostring(planted),
-                tostring(plantSignal) or "none",
-                tostring(plantedSite) or "-",
-                probe.attachmentFolders,
-                probe.holstersInFolders,
-                tostring(probe.lastOwner) or "-",
-                probe.zoneCount,
-                probe.lastScore,
-                probe.lastOwnerRig,
-                probe.lastOwnerAlive,
-                probe.lastOwnerPlayer,
-                probe.stickyAlive,
-                tostring(probe.screenTimer) or "-",
-                where
-            )
-        end
-    end)
+    local planted, timer, plantedSite = plantedInfo(worldBomb, resolvePosition(worldBomb, 0))
 
     if worldBomb then
         -- One rule decides the label, using the same scan that located the bomb:
         --
         --   carried by a LIVING player  -> C4 Carrier: <name>  (red)
-        --   the game fired "Planted"    -> C4 Planted  <t>s     (amber)
-        --   anything else               -> C4 Dropped            (green)
+        --   planted                    -> C4 Planted  <t>s     (amber)
+        --   anything else              -> C4 Dropped            (green)
         --
         -- "Anything else" covers all three drop cases the game produces: the
         -- carrier dying, the carrier throwing it, and a mid-plant re-drop.
@@ -1554,7 +1316,6 @@ local function update()
         drawWorldBomb(camera, worldBomb, markerColor, label)
     else
         hideItem("World")
-        stateLog("no bomb instance found in workspace yet")
     end
 end
 
@@ -1577,15 +1338,11 @@ function C4ESP.cleanup()
 
     hideAll()
 
-    if debugText then
-        pcall(function() debugText:Remove() end)
-        debugText = nil
-    end
-
     for key, item in pairs(C4ESP.Items) do
         pcall(function()
             item.Box:Remove()
             item.Label:Remove()
+            if item.Arrow then item.Arrow:Remove() end
         end)
         C4ESP.Items[key] = nil
     end
@@ -1595,7 +1352,12 @@ function C4ESP.cleanup()
     cache.carrier = nil
     cache.worldBombValid = false
     cache.lastBombScan = 0
-    lastState = ""
+
+    -- Planted state is module-level, so it has to be cleared explicitly or a
+    -- re-init would inherit a latch from the previous session.
+    releasePlanted()
+    siteZones = nil
+    siteBoxes = nil
 
     storedConfig = nil
     C4ESP.Initialized = false

@@ -53,6 +53,12 @@ local Config = {
     -- reads 67 whether the bomb is planted or merely lying on the floor, which is
     -- neither the fuse length nor a countdown.
     C4_BOMB_TIME = 40,
+    -- How far outside the union of a site's trigger parts still counts as
+    -- "on site" for the planted label, in studs. This is the only knob for the
+    -- known limitation of the site test: a bomb DROPPED inside a site reads as
+    -- planted. Raising it makes that worse; lowering it risks missing a real
+    -- plant that sits outside the triggers.
+    C4_PLANTED_SITE_PAD = 12,
     GRENADE_ESP_ENABLED = false,
     GRENADE_ESP_BOX_SIZE = 26,
     GRENADE_ESP_MAX_DISTANCE = 800,
@@ -252,6 +258,12 @@ local DEFAULT_VALUES = {
     -- reads 67 whether the bomb is planted or merely lying on the floor, which is
     -- neither the fuse length nor a countdown.
     C4_BOMB_TIME = 40,
+    -- How far outside the union of a site's trigger parts still counts as
+    -- "on site" for the planted label, in studs. This is the only knob for the
+    -- known limitation of the site test: a bomb DROPPED inside a site reads as
+    -- planted. Raising it makes that worse; lowering it risks missing a real
+    -- plant that sits outside the triggers.
+    C4_PLANTED_SITE_PAD = 12,
     GRENADE_ESP_ENABLED = false,
     GRENADE_ESP_BOX_SIZE = 26,
     GRENADE_ESP_MAX_DISTANCE = 800,
