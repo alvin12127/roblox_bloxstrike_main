@@ -702,113 +702,249 @@ end
 -- ==========================================================
 -- Planted state
 -- ==========================================================
--- An instance dump of a live round shows there are NO bomb attributes anywhere:
--- no @BombPlanted and no @BombTimer. The game reports the plant through a
--- RemoteEvent instead ("Planted", sitting next to BombSiteEntered /
--- BombSiteExited in NetworkRemotes). The previous version polled attributes that
--- do not exist, so "Planted" could never be shown.
+-- There are NO bomb attributes in this game. An instance dump of a live round has
+-- zero @BombPlanted and zero @BombTimer, so the previous version polled values
+-- that do not exist and "Planted" was structurally unreachable.
 --
--- The remote is watched directly and the result is LATCHED: the game fires
--- "Planted" once, so a bare event flag would be gone by the next frame. The
--- latch is released as soon as the bomb is carried again (picked back up) or
--- when the bomb instance goes missing for a whole scan interval (round over).
+-- What is actually available, all confirmed from the dump:
+--
+--   ReplicatedStorage/NetworkRemotes/C4/Planted        (RemoteEvent)
+--   ReplicatedStorage/NetworkRemotes/C4/Defused        (RemoteEvent)
+--   ReplicatedStorage/NetworkRemotes/C4/Cancel        (RemoteEvent)
+--   ReplicatedStorage/NetworkRemotes/C4/ForceCancel   (RemoteEvent)
+--   Workspace.../<Sites>/ZoneParts_A/B  -> Parts with @Site = "A" / "B"
+--   the bomb's Screen -> SurfaceGui -> TextLabel, which shows the countdown
+--
+-- Three independent signals are used, in order of confidence:
+--
+--   1. the C4 remote fired              -> planted, exact
+--   2. the Screen reads a countdown     -> planted, and it gives the timer
+--   3. the bomb sits inside a bomb site -> planted, inferred
+--
+-- The latch is the subtle part. Planting REPLACES the holster, so clearing the
+-- latch when the bomb instance changes wiped it on the very frame the plant
+-- arrived - which is exactly why a planted bomb was reported as "Dropped".
+-- The instance identity is therefore no longer used to decide a new round; the
+-- latch is released only when the bomb disappears for a while, when somebody
+-- carries it again, or when the game says the plant ended.
+local ROUND_RESET_GRACE = 1.5
+local DEFAULT_BOMB_TIME = 40
+
 local plantedState = {
     latched = false,
     latchedAt = nil,
     hookInstalled = false,
-    lastSeenBomb = nil,
     missingSince = nil,
 }
 
 local function releasePlanted()
     plantedState.latched = false
     plantedState.latchedAt = nil
-    plantedState.lastSeenBomb = nil
     plantedState.missingSince = nil
+end
+
+-- The remotes live at ReplicatedStorage/NetworkRemotes/C4/<name>. Three
+    -- fallback layouts are tried as well, because a remote moving one folder up
+    -- would otherwise make "Planted" silently unreachable again - which is
+    -- exactly how this feature failed in the first place.
+local function locateC4Remote(name)
+    local remotes = nil
+    pcall(function() remotes = ReplicatedStorage:FindFirstChild("NetworkRemotes") end)
+
+    local c4 = nil
+    if remotes then
+        pcall(function() c4 = remotes:FindFirstChild("C4") end)
+    end
+    if not c4 then
+        pcall(function()
+            for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
+                if d:IsA("Folder") and d.Name == "C4" then c4 = d break end
+            end
+        end)
+    end
+
+    local function pick(container)
+        local ev = nil
+        if container then
+            pcall(function() ev = container:FindFirstChild(name) end)
+        end
+        if ev and ev:IsA("RemoteEvent") then return ev end
+        return nil
+    end
+
+    return pick(c4) or pick(remotes)
+        or (function()
+            local found = nil
+            pcall(function()
+                for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
+                    if d.Name == name and d:IsA("RemoteEvent") then found = d break end
+                end
+            end)
+            return found
+        end)()
 end
 
 local function installPlantedHook()
     if plantedState.hookInstalled then return end
 
     pcall(function()
-        local roots = {
-            ReplicatedStorage:FindFirstChild("NetworkRemotes"),
-            ReplicatedStorage:FindFirstChild("Remotes"),
-            ReplicatedStorage,
-        }
-        for _, root in ipairs(roots) do
-            if root then
-                local ev = nil
-                pcall(function() ev = root:FindFirstChild("Planted") end)
-                if (not ev) or (not ev:IsA("RemoteEvent")) then
-                    ev = nil
-                    pcall(function()
-                        for _, d in ipairs(root:GetDescendants()) do
-                            if d.Name == "Planted" and d:IsA("RemoteEvent") then
-                                ev = d
-                                break
-                            end
-                        end
-                    end)
-                end
-                if ev then
-                    ev.OnClientEvent:Connect(function()
-                        plantedState.latched = true
-                        plantedState.latchedAt = os.clock()
-                    end)
-                    plantedState.hookInstalled = true
-                    return
-                end
-            end
+        local function connect(name, fn)
+            local ev = locateC4Remote(name)
+            if not ev then return false end
+            ev.OnClientEvent:Connect(fn)
+            return true
         end
+
+        local hooked = false
+        hooked = connect("Planted", function()
+            plantedState.latched = true
+            plantedState.latchedAt = os.clock()
+        end) or hooked
+
+        -- The plant ended: defused, or cancelled. Any of these releases it, so a
+        -- stale latch cannot survive into the next round.
+        for _, name in ipairs({ "Defused", "ForceCancel", "Cancel" }) do
+            hooked = connect(name, function() releasePlanted() end) or hooked
+        end
+
+        plantedState.hookInstalled = hooked
     end)
 end
 
--- Returns: planted, timerSeconds
-local function plantedInfo(bombInstance)
-    if not bombInstance then
-        releasePlanted()
-        return false, 0
+-- The C4 has a Screen part with a SurfaceGui whose TextLabel shows the countdown
+-- once it is planted. Read at runtime; the instance dump does not record GUI text
+-- so this could not be confirmed offline, but it costs nothing to try and it
+-- yields the real timer instead of a guess.
+local function readScreenTimer(inst)
+    if not inst then return nil end
+
+    local screen = nil
+    pcall(function()
+        for _, d in ipairs(inst:GetDescendants()) do
+            if d.Name == "Screen" and d:IsA("BasePart") then screen = d break end
+        end
+    end)
+    if not screen then return nil end
+
+    local text = nil
+    pcall(function()
+        for _, g in ipairs(screen:GetDescendants()) do
+            if g:IsA("TextLabel") and g.Visible ~= false then text = tostring(g.Text) break end
+        end
+    end)
+    if type(text) ~= "string" then return nil end
+
+    text = text:match("^%s*(%S+)%s*$")
+    if not text then return nil end
+
+    -- "1:23" / "1.23" -> 83 seconds
+    local m, s = text:match("^(%d+):(%d%d)$")
+    if m then return (tonumber(m) * 60) + tonumber(s) end
+
+    -- Plain digits, optionally with a decimal point from a display like "0.5".
+    local n = tonumber(text)
+    if n then
+        if n > 100 then return nil end      -- not a clock
+        return n
     end
 
-    installPlantedHook()
+    return nil
+end
 
-    -- A different holster instance means a new round, so an old latch is stale.
-    if plantedState.lastSeenBomb ~= bombInstance then
-        plantedState.latched = false
-        plantedState.latchedAt = nil
-        plantedState.lastSeenBomb = bombInstance
-    end
-    plantedState.missingSince = nil
+-- Bomb site zones. The dump shows Sites/ZoneParts_A and _B holding Parts with an
+-- @Site attribute. Used only as a last-resort "planted" inference.
+local siteZones = nil
 
-    -- Attributes, in case a future build exposes them. Cheap and harmless.
-    local attrPlanted = false
-    pcall(function()
-        if LocalPlayer:GetAttribute("BombPlanted") == true then attrPlanted = true end
-    end)
-    pcall(function()
-        local char = LocalPlayer.Character
-        if char and char:GetAttribute("BombPlanted") == true then attrPlanted = true end
-    end)
+local function buildSiteZones()
+    if siteZones then return siteZones end
+    siteZones = {}
 
-    local timer = 0
-    pcall(function() timer = tonumber(LocalPlayer:GetAttribute("BombTimer")) or 0 end)
-    if timer <= 0 then
+    local function collect(root)
         pcall(function()
-            local char = LocalPlayer.Character
-            if char then timer = tonumber(char:GetAttribute("BombTimer")) or 0 end
+            for _, f in ipairs(root:GetChildren()) do
+                if f:IsA("Folder") and f.Name == "Sites" then
+                    eachSubFolder(f, 3, function(zf)
+                        pcall(function()
+                            for _, part in ipairs(zf:GetChildren()) do
+                                if part:IsA("BasePart") then
+                                    local site = nil
+                                    pcall(function() site = part:GetAttribute("Site") end)
+                                    if site then
+                                        table.insert(siteZones, {
+                                            site = tostring(site),
+                                            pos = part.Position,
+                                            half = part.Size * 0.5,
+                                        })
+                                    end
+                                end
+                            end
+                        end)
+                    end)
+                end
+            end
         end)
     end
 
-    local planted = plantedState.latched or attrPlanted
-    if not planted then return false, timer end
+    pcall(function() collect(Workspace) end)
+    pcall(function() collect(ReplicatedStorage) end)
 
-    -- No timer value from the game: approximate one from the latch moment.
-    if timer <= 0 and plantedState.latchedAt then
-        timer = math.max(0, 40 - (os.clock() - plantedState.latchedAt))
+    return siteZones
+end
+
+local function insideBombSite(position)
+    if not position then return nil end
+
+    for _, z in ipairs(buildSiteZones()) do
+        local dx = math.abs(position.X - z.pos.X)
+        local dy = math.abs(position.Y - z.pos.Y)
+        local dz = math.abs(position.Z - z.pos.Z)
+        if dx <= z.half.X and dy <= z.half.Y and dz <= z.half.Z then
+            return z.site
+        end
+    end
+    return nil
+end
+
+-- Returns: planted, timerSeconds, siteNameOrNil
+local function plantedInfo(bombInstance, position)
+    -- No bomb at all: after a grace period the round is over and any latch is
+    -- stale. The grace period matters because a plant briefly destroys the old
+    -- holster, and clearing on that would wipe the latch again.
+    if not bombInstance then
+        if plantedState.missingSince == nil then
+            plantedState.missingSince = os.clock()
+        elseif (os.clock() - plantedState.missingSince) > ROUND_RESET_GRACE then
+            releasePlanted()
+        end
+        return false, 0, nil
     end
 
-    return true, timer
+    installPlantedHook()
+    plantedState.missingSince = nil
+
+    -- The Screen text is the strongest live signal, and it carries the timer.
+    local screenTimer = readScreenTimer(bombInstance)
+    local site = nil
+    if (not plantedState.latched) and (not screenTimer) then
+        site = insideBombSite(position)
+    end
+
+    local planted = plantedState.latched or (screenTimer ~= nil) or (site ~= nil)
+    if not planted then return false, 0, nil end
+
+    local timer = screenTimer or 0
+
+    -- No text to read (model replaced, or the Screen was not reachable): fall
+    -- back to counting down from the moment the plant was latched.
+    if (not timer) or (timer <= 0) then
+        if plantedState.latchedAt then
+            timer = math.max(0, DEFAULT_BOMB_TIME - (os.clock() - plantedState.latchedAt))
+        else
+            timer = DEFAULT_BOMB_TIME
+        end
+    end
+
+    return true, timer, site
 end
 
 -- Somebody picked the bomb back up, so any plant latch has to go.
@@ -1147,7 +1283,7 @@ local function update()
         hideItem("Carrier")
     end
 
-    local planted, timer = plantedInfo(worldBomb)
+    local planted, timer, plantedSite = plantedInfo(worldBomb, resolvePosition(worldBomb, 0))
 
     -- On-screen debug readout (top-left, yellow) so the state is visible even
     -- when every console is blocked.
@@ -1179,11 +1315,12 @@ local function update()
                 end
             end
             debugText.Text = string.format(
-                "C4 carrier=%s bomb=%s\nvia=%s planted=%s\natt=%d hol=%d own=%s\nscore=%d rig=%d alive=%d pl=%d stick=%d\nstatus=%s",
+                "C4 carrier=%s bomb=%s\nvia=%s planted=%s site=%s\natt=%d hol=%d own=%s\nscore=%d rig=%d alive=%d pl=%d stick=%d\nstatus=%s",
                 tostring(carrierName) or "nil",
                 tostring(worldBomb and worldBomb.Name) or "nil",
                 tostring(cache.bombSource) or "none",
                 tostring(planted),
+                tostring(plantedSite) or "-",
                 probe.attachmentFolders,
                 probe.holstersInFolders,
                 tostring(probe.lastOwner) or "-",
@@ -1216,6 +1353,7 @@ local function update()
             label = "C4 Carrier: " .. tostring(carrierName)
         elseif planted then
             label = string.format("C4 Planted  %.0fs", timer)
+                .. (plantedSite and ("  SITE " .. tostring(plantedSite)) or "")
             markerColor = Color3.fromRGB(255, 170, 40)
         else
             label = "C4 Dropped"
