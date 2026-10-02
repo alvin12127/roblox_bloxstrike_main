@@ -15,7 +15,7 @@
 --     remaining timer when it is planted.
 --
 -- Performance: the expensive workspace scans are cached (carrier 0.25s,
--- world bomb 0.5s, C4 folder list 10s). Never scan the tree every frame.
+-- world bomb 0.5s). Never scan the tree every frame.
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
@@ -31,226 +31,11 @@ local C4ESP = {
 
 local storedConfig = nil
 
-local function getCamera()
-    return Workspace.CurrentCamera
-end
-
-local function makeItem(key)
-    local item = C4ESP.Items[key]
-
-    if item then return item end
-
-    local okBox, box = pcall(function() return Drawing.new("Square") end)
-    local okText, label = pcall(function() return Drawing.new("Text") end)
-
-    if (not okBox) or (not okText) then
-        if okBox then pcall(function() box:Remove() end) end
-        if okText then pcall(function() label:Remove() end) end
-        return nil
-    end
-
-    pcall(function()
-        box.Thickness = 1.5
-        box.Filled = false
-        box.Visible = false
-
-        label.Size = 13
-        label.Center = true
-        label.Outline = true
-        label.Visible = false
-    end)
-
-    item = { Box = box, Label = label }
-    C4ESP.Items[key] = item
-
-    return item
-end
-
-local function hideAll()
-    for _, item in pairs(C4ESP.Items) do
-        pcall(function()
-            item.Box.Visible = false
-            item.Label.Visible = false
-        end)
-    end
-end
-
--- the bomb carrier has the C4 strapped to the rig (on the back).
--- The C4 is a Model/BasePart parented somewhere inside the character - it
--- is NOT always a direct "BombHolster" child. Scan the whole character
--- tree for anything named C4 / Bomb, which is what made the earlier
--- grenade ESP attempt detect it correctly.
-local function findBombCarrier()
-    local characters = Workspace:FindFirstChild("Characters")
-    if not characters then return nil end
-
-    for _, character in ipairs(characters:GetChildren()) do
-        if character:IsA("Model") then
-            -- 1. Named holder parented anywhere under the character
-            local holder = nil
-            pcall(function()
-                for _, d in ipairs(character:GetDescendants()) do
-                    if d:IsA("Model") or d:IsA("Folder") or d:IsA("BasePart") then
-                        local n = d.Name:lower()
-                        if n:find("bombholster", 1, true)
-                            or n:find("c4", 1, true)
-                            or n:find("bomb", 1, true) then
-                            holder = d
-                            break
-                        end
-                    end
-                end
-            end)
-            if holder then
-                return character
-            end
-        end
-
-        do
-            -- 2. Attribute based fallback (works for any character type)
-            local hasBomb = false
-            pcall(function()
-                hasBomb = (character:GetAttribute("HasBomb") == true)
-                    or (character:GetAttribute("Bomb") == true)
-                    or (character:GetAttribute("HasC4") == true)
-                    or (character:GetAttribute("C4") == true)
-            end)
-            if hasBomb then
-                return character
-            end
-
-            -- 3. Player attribute fallback
-            local player = Players:FindFirstChild(character.Name)
-            if player then
-                local pHas = false
-                pcall(function()
-                    pHas = (player:GetAttribute("HasBomb") == true)
-                        or (player:GetAttribute("Bomb") == true)
-                        or (player:GetAttribute("HasC4") == true)
-                        or (player:GetAttribute("C4") == true)
-                end)
-                if pHas then
-                    return character
-                end
-            end
-        end
-    end
-
-    return nil
-end
-
--- Name matching: the scan technique is taken from the GrenadeESP module
--- (workspace scan by name substring) but the hints are deliberately NARROW.
--- The old grenade attempt matched grenade/smoke/molotov/flash too, which made
--- it flag everything and got it scrapped. Only C4 / bomb names are accepted
--- here so the bomb is tracked without the noise.
-local BOMB_HINTS = {
-    "c4", "bomb", "bombholster"
-}
-
-local function isBombName(name)
-    if type(name) ~= "string" then return false end
-    local lower = name:lower()
-
-    for _, hint in ipairs(BOMB_HINTS) do
-        if lower:find(hint, 1, true) then
-            return true
-        end
-    end
-
-    return false
-end
-
--- The physical bomb. Uses the GrenadeESP scan technique: walk the workspace
--- three levels deep and match by name substring. Characters are excluded so
--- the carrier's rig is never mistaken for a dropped bomb (the carrier is
--- handled separately by findBombCarrier).
-local function findWorldBomb()
-    local charsFolder = Workspace:FindFirstChild("Characters")
-    local foundBomb = nil
-
-    local function matches(inst)
-        if not inst then return false end
-        if not (inst:IsA("BasePart") or inst:IsA("Model")) then return false end
-        -- skip anything parented under a player rig
-        if charsFolder and inst:IsDescendantOf(charsFolder) then return false end
-        return isBombName(inst.Name)
-    end
-
-    pcall(function()
-        for _, child in ipairs(Workspace:GetChildren()) do
-            if child ~= charsFolder then
-                if matches(child) then
-                    foundBomb = child
-                    return
-                end
-                for _, sub in ipairs(child:GetChildren()) do
-                    if matches(sub) then
-                        foundBomb = sub
-                        return
-                    end
-                    for _, leaf in ipairs(sub:GetChildren()) do
-                        if matches(leaf) then
-                            foundBomb = leaf
-                            return
-                        end
-                    end
-                end
-            end
-        end
-    end)
-
-    return foundBomb
-end
-
-local function bombAttributes()
-    local planted = false
-    local timer = 0
-
-    pcall(function()
-        planted = (LocalPlayer:GetAttribute("BombPlanted") == true)
-        timer = tonumber(LocalPlayer:GetAttribute("BombTimer")) or 0
-    end)
-
-    return planted, timer
-end
-
-local function drawCarrier(camera, character, color)
-    local item = makeItem("Carrier")
-    if not item then return end
-
-    local part = character:FindFirstChild("Head") or character:FindFirstChild("UpperTorso")
-    if not part then
-        item.Box.Visible = false
-        item.Label.Visible = false
-        return
-    end
-
-    local ok, screen = pcall(camera.WorldToViewportPoint, camera, part.Position + Vector3.new(0, 2, 0))
-
-    if (not ok) or (not screen) or (screen.Z <= 0) then
-        item.Box.Visible = false
-        item.Label.Visible = false
-        return
-    end
-
-    local player = Players:FindFirstChild(character.Name)
-    local shown = (player and player.DisplayName) or character.Name
-
-    pcall(function()
-        item.Label.Text = "C4 Carrier: " .. tostring(shown)
-        item.Label.Position = Vector2.new(screen.X, screen.Y)
-        item.Label.Color = color
-        item.Label.Visible = true
-        item.Box.Visible = false
-    end)
-end
-
-local lastDrawLog = 0
-
--- Log to whichever console is reachable. Some executors block Roblox's F9
--- output entirely, so the executor console APIs are tried first and warn() is
--- only the fallback.
+-- ==========================================================
+-- Diagnostics
+-- ==========================================================
+-- Some executors block Roblox's F9 output entirely, so the executor console
+-- APIs are tried first and warn() is only the fallback.
 local function execLog(msg)
     local line = "[Bloxstrike] C4 ESP: " .. msg
     local written = false
@@ -272,17 +57,23 @@ local function execLog(msg)
     pcall(function() warn(line) end)
 end
 
--- Throttled diagnostic logger (at most once per second).
-local function drawLog(msg)
-    local now = os.clock()
-    if (now - lastDrawLog) >= 1 then
-        lastDrawLog = now
+-- State-change logger.
+--
+-- A plain time throttle cannot be used here: the "about to draw" message
+-- fires every frame and would consume the whole throttle budget, so every
+-- message emitted *inside* the draw function was silently swallowed forever.
+-- Logging only when the message text actually changes guarantees the reason
+-- the marker is not appearing is always visible.
+local lastState = ""
+local function stateLog(msg)
+    if msg ~= lastState then
+        lastState = msg
         execLog(msg)
     end
 end
 
--- On-screen debug readout. Drawn as Drawing text so the state is visible even
--- when every console is blocked.
+-- On-screen debug readout so the state is visible even when every console is
+-- blocked.
 local debugText = nil
 local function ensureDebugLabel()
     if debugText then return end
@@ -291,57 +82,391 @@ local function ensureDebugLabel()
         debugText.Size = 13
         debugText.Center = false
         debugText.Outline = true
-        debugText.Color = Color3.fromRGB(255, 255, 0)
-        debugText.Position = Vector2.new(20, 140)
+        debugText.Color = Color3.fromRGB(255, 220, 0)
+        debugText.Position = Vector2.new(16, 150)
         debugText.Visible = false
         debugText.Text = ""
     end)
 end
 
-local function drawWorldBomb(camera, model, color, label)
-    local item = makeItem("World")
-    if not item then
-        drawLog("draw skipped - no drawing item for 'World'")
+-- ==========================================================
+-- Drawing primitives
+-- ==========================================================
+local function makeItem(key)
+    local item = C4ESP.Items[key]
+    if item then return item end
+
+    local okBox, box = pcall(function() return Drawing.new("Square") end)
+    local okText, label = pcall(function() return Drawing.new("Text") end)
+
+    if (not okBox) or (not okText) or (not box) or (not label) then
+        if okBox and box then pcall(function() box:Remove() end) end
+        if okText and label then pcall(function() label:Remove() end) end
+        return nil
+    end
+
+    pcall(function()
+        box.Thickness = 1.5
+        box.Filled = false
+        box.Visible = false
+        box.ZIndex = 2
+
+        label.Size = 13
+        label.Center = true
+        label.Outline = true
+        label.Visible = false
+        label.ZIndex = 3
+    end)
+
+    item = { Box = box, Label = label }
+    C4ESP.Items[key] = item
+
+    return item
+end
+
+local function hideItem(key)
+    local item = C4ESP.Items[key]
+    if not item then return end
+    pcall(function() item.Box.Visible = false end)
+    pcall(function() item.Label.Visible = false end)
+end
+
+local function hideAll()
+    for key in pairs(C4ESP.Items) do
+        hideItem(key)
+    end
+end
+
+-- ==========================================================
+-- Position resolution
+-- ==========================================================
+-- Resolve a world position from any kind of instance.
+--
+-- NOTE: Instance:GetBoundingBox() returns (CFrame, Vector3) - the CFrame comes
+-- FIRST and the size SECOND. Reading them the other way round (the old bug)
+-- made `cf.Size` and `sz.Position` both nil, so every single marker silently
+-- bailed out with "no position" and nothing was ever drawn.
+local function resolvePosition(inst, depth)
+    if not inst then return nil end
+    depth = (depth or 0)
+
+    if inst:IsA("BasePart") then
+        local ok, p = pcall(function() return inst.Position end)
+        if ok and p then return p end
+        return nil
+    end
+
+    if inst:IsA("Attachment") then
+        local ok, p = pcall(function() return inst.WorldPosition end)
+        if ok and p then return p end
+        return nil
+    end
+
+    if inst:IsA("Model") then
+        local ok, cf = pcall(function() return inst:GetBoundingBox() end)
+        if ok and cf and typeof(cf) == "CFrame" then
+            local okPos, p = pcall(function() return cf.Position end)
+            if okPos and p then return p end
+        end
+
+        -- GetBoundingBox can fail when the model has no PrimaryPart
+        if depth < 3 then
+            local part = nil
+            pcall(function() part = inst.PrimaryPart end)
+            if not part then
+                pcall(function() part = inst:FindFirstChildWhichIsA("BasePart") end)
+            end
+            if part then
+                local okPos, p = pcall(function() return part.Position end)
+                if okPos and p then return p end
+            end
+        end
+    end
+
+    -- Folders / other containers: use the first child that resolves
+    if depth < 4 then
+        local kids = nil
+        pcall(function() kids = inst:GetChildren() end)
+        if kids then
+            for _, child in ipairs(kids) do
+                local p = resolvePosition(child, depth + 1)
+                if p then return p end
+            end
+        end
+    end
+
+    return nil
+end
+
+-- ==========================================================
+-- Detection
+-- ==========================================================
+-- Name matching: the scan technique is taken from the GrenadeESP module
+-- (workspace scan by name substring) but the hints are deliberately NARROW.
+-- Broad hints (grenade / smoke / molotov) flag everything, which is why that
+-- attempt got scrapped. Only C4 / bomb names are accepted here.
+local BOMB_HINTS = {
+    "c4", "bomb", "bombholster"
+}
+
+local function isBombName(name)
+    if type(name) ~= "string" then return false end
+    local lower = name:lower()
+
+    for _, hint in ipairs(BOMB_HINTS) do
+        if lower:find(hint, 1, true) then
+            return true
+        end
+    end
+
+    return false
+end
+
+-- The bomb carrier has the C4 strapped to the rig (on the back). Two different
+-- hierarchies were observed in game, so both are handled:
+--   1. a bomb-named instance somewhere under the character model
+--   2. a "<PlayerName>_WeaponAttachments" folder living directly in Workspace
+--      that holds the BombHolster
+local function findCarrierByWeaponAttachments()
+    local target = nil
+
+    pcall(function()
+        for _, holder in ipairs(Workspace:GetChildren()) do
+            if holder:IsA("Folder") or holder:IsA("Model") then
+                local hn = tostring(holder.Name)
+                if hn:lower():find("weaponattachment", 1, true) then
+                    for _, d in ipairs(holder:GetDescendants()) do
+                        if isBombName(d.Name) then
+                            target = hn
+                            break
+                        end
+                    end
+                end
+            end
+            if target then break end
+        end
+    end)
+
+    if not target then return nil end
+
+    -- "kewgtiv_WeaponAttachments" -> "kewgtiv"
+    local owner = target:match("^(.-)_WeaponAttachments")
+                or target:match("^(.-)%.WeaponAttachments")
+    if not owner then return nil end
+
+    local player = Players:FindFirstChild(owner)
+    if player then
+        local character = nil
+        pcall(function() character = player.Character end)
+        if character then return character end
+    end
+
+    -- Player object missing - fall back to the matching character model
+    local characters = Workspace:FindFirstChild("Characters")
+    if characters then
+        for _, c in ipairs(characters:GetChildren()) do
+            if c:IsA("Model") and (tostring(c.Name):lower() == tostring(owner):lower()) then
+                return c
+            end
+        end
+    end
+
+    return nil
+end
+
+local function findBombCarrier()
+    local characters = Workspace:FindFirstChild("Characters")
+    if not characters then return findCarrierByWeaponAttachments() end
+
+    for _, character in ipairs(characters:GetChildren()) do
+        if character:IsA("Model") and (character ~= LocalPlayer.Character) then
+            -- 1. Named holder anywhere under the character
+            local holder = nil
+            pcall(function()
+                for _, d in ipairs(character:GetDescendants()) do
+                    if d:IsA("Model") or d:IsA("Folder") or d:IsA("BasePart") then
+                        local n = d.Name:lower()
+                        if n:find("bombholster", 1, true)
+                            or n:find("c4", 1, true)
+                            or n:find("bomb", 1, true) then
+                            holder = d
+                            break
+                        end
+                    end
+                end
+            end)
+            if holder then return character end
+        end
+
+        do
+            -- 2. Attribute based fallback (works for any character type)
+            local hasBomb = false
+            pcall(function()
+                hasBomb = (character:GetAttribute("HasBomb") == true)
+                    or (character:GetAttribute("Bomb") == true)
+                    or (character:GetAttribute("HasC4") == true)
+                    or (character:GetAttribute("C4") == true)
+            end)
+            if hasBomb then return character end
+
+            -- 3. Player attribute fallback
+            local player = Players:FindFirstChild(character.Name)
+            if player then
+                local pHas = false
+                pcall(function()
+                    pHas = (player:GetAttribute("HasBomb") == true)
+                        or (player:GetAttribute("Bomb") == true)
+                        or (player:GetAttribute("HasC4") == true)
+                        or (player:GetAttribute("C4") == true)
+                end)
+                if pHas then return character end
+            end
+        end
+    end
+
+    return findCarrierByWeaponAttachments()
+end
+
+-- Priority: a bomb sitting loose in the world (Debris / map folders) is far
+-- more useful than the holster model riding on the carrier's back, so loose
+-- instances win when several candidates match.
+local function bombPriority(inst)
+    local score = 0
+
+    local parentName = ""
+    pcall(function() parentName = tostring(inst.Parent and inst.Parent.Name) end)
+    local lowerParent = parentName:lower()
+
+    if lowerParent:find("debris", 1, true) then score = score + 40 end
+    if lowerParent:find("weaponattachment", 1, true) then score = score - 20 end
+    if lowerParent == "workspace" then score = score - 30 end
+
+    local own = inst.Name:lower()
+    if own == "c4" or own == "bomb" then score = score + 10 end
+    if own:find("bombholster", 1, true) then score = score - 5 end
+    -- GUID style names are renamed instances (debris) - still useful, but only
+    -- when nothing better exists
+    if own:match("^%x%x%x%x%x%x%x%x%-%x%x%x%x%-") then score = score - 5 end
+
+    return score
+end
+
+-- The physical bomb. Uses the GrenadeESP scan technique: walk the workspace
+-- three levels deep and match by name substring. Characters are excluded so
+-- the carrier's rig is never mistaken for a dropped bomb.
+local function findWorldBomb()
+    local charsFolder = Workspace:FindFirstChild("Characters")
+    local localChar = LocalPlayer and LocalPlayer.Character
+    local best = nil
+    local bestScore = nil
+
+    local function consider(inst)
+        if not inst then return end
+        if not (inst:IsA("BasePart") or inst:IsA("Model") or inst:IsA("Folder")) then return end
+
+        -- skip anything parented under a player rig
+        if charsFolder and inst:IsDescendantOf(charsFolder) then return end
+        if localChar and inst:IsDescendantOf(localChar) then return end
+
+        -- skip the first person viewmodel (it lives under the Camera)
+        local underCamera = false
+        pcall(function() underCamera = inst:IsDescendantOf(Workspace.CurrentCamera) end)
+        if underCamera then return end
+
+        if not isBombName(inst.Name) then return end
+        -- must actually resolve to somewhere on the map
+        if not resolvePosition(inst, 0) then return end
+
+        local score = bombPriority(inst)
+        if (not bestScore) or (score > bestScore) then
+            best = inst
+            bestScore = score
+        end
+    end
+
+    pcall(function()
+        for _, child in ipairs(Workspace:GetChildren()) do
+            if child ~= charsFolder then
+                consider(child)
+                for _, sub in ipairs(child:GetChildren()) do
+                    consider(sub)
+                    for _, leaf in ipairs(sub:GetChildren()) do
+                        consider(leaf)
+                    end
+                end
+            end
+        end
+    end)
+
+    return best
+end
+
+local function bombAttributes()
+    local planted = false
+    local timer = 0
+
+    pcall(function()
+        planted = (LocalPlayer:GetAttribute("BombPlanted") == true)
+        timer = tonumber(LocalPlayer:GetAttribute("BombTimer")) or 0
+    end)
+
+    return planted, timer
+end
+
+-- ==========================================================
+-- Draw
+-- ==========================================================
+local function drawCarrier(camera, character, color)
+    local item = makeItem("Carrier")
+    if not item then return end
+
+    local part = character:FindFirstChild("Head") or character:FindFirstChild("UpperTorso")
+    if not part then
+        hideItem("Carrier")
         return
     end
 
-    -- Resolve a world position and a size. GetBoundingBox() fails on models
-    -- without a PrimaryPart, so fall back to any BasePart they contain.
-    local position = nil
-    local size = nil
+    local ok, screen = pcall(camera.WorldToViewportPoint, camera, part.Position + Vector3.new(0, 2, 0))
 
-    local okBox, box, center = pcall(function()
-        return model:GetBoundingBox()
-    end)
-
-    if okBox and box and center then
-        position = center.Position
-        size = box.Size
-    else
-        pcall(function()
-            local part = model.PrimaryPart or model:FindFirstChildOfClass("BasePart")
-            if part then
-                position = part.Position
-                size = part.Size
-            end
-        end)
+    if (not ok) or (not screen) or (screen.Z <= 0) then
+        hideItem("Carrier")
+        return
     end
 
-    if not position then
-        drawLog("draw skipped - no position for "
-            .. tostring(model.Name) .. " (GetBoundingBox failed)")
+    local player = Players:FindFirstChild(character.Name)
+    local shown = (player and player.DisplayName) or character.Name
+
+    pcall(function()
+        item.Label.Text = "C4 Carrier: " .. tostring(shown)
+        item.Label.Position = Vector2.new(screen.X, screen.Y)
+        item.Label.Color = color
+        item.Label.Visible = true
         item.Box.Visible = false
-        item.Label.Visible = false
+    end)
+end
+
+local function drawWorldBomb(camera, inst, color, label)
+    local item = makeItem("World")
+    if not item then
+        stateLog("draw failed - Drawing library unavailable")
+        return
+    end
+
+    local position = resolvePosition(inst, 0)
+
+    if not position then
+        stateLog("draw failed - no position resolved for '" .. tostring(inst.Name)
+            .. "' (class=" .. tostring(inst.ClassName) .. ")")
+        hideItem("World")
         return
     end
 
     local okScreen, screen = pcall(camera.WorldToViewportPoint, camera, position)
 
     if (not okScreen) or (not screen) or (screen.Z <= 0) then
-        drawLog("draw skipped - behind camera or off screen (Z="
-            .. tostring(screen and screen.Z) .. ") for " .. tostring(model.Name))
-        item.Box.Visible = false
-        item.Label.Visible = false
+        stateLog("draw failed - '" .. tostring(inst.Name) .. "' is behind the camera (Z="
+            .. tostring(screen and screen.Z) .. ")")
+        hideItem("World")
         return
     end
 
@@ -351,15 +476,16 @@ local function drawWorldBomb(camera, model, color, label)
     -- marker readable at any distance.
     local width = 26
 
-    -- Log the resolved screen position once so we can tell whether the marker
-    -- is landing inside the viewport or off screen / behind the camera.
-    drawLog("drawing world bomb: " .. tostring(model.Name)
-        .. " screen=(" .. tostring(math.floor(screen.X)) .. ", "
-        .. tostring(math.floor(screen.Y)) .. ")"
-        .. " Z=" .. tostring(math.floor(screen.Z))
-        .. " width=" .. tostring(width))
+    local viewport = camera.ViewportSize
+    if (screen.X < -width) or (screen.Y < -width)
+        or (screen.X > viewport.X + width) or (screen.Y > viewport.Y + width) then
+        stateLog("draw failed - '" .. tostring(inst.Name) .. "' is off screen at ("
+            .. tostring(math.floor(screen.X)) .. ", " .. tostring(math.floor(screen.Y)) .. ")")
+        hideItem("World")
+        return
+    end
 
-    pcall(function()
+    local okDraw = pcall(function()
         item.Box.Position = Vector2.new(screen.X - (width / 2), screen.Y - (width / 2))
         item.Box.Size = Vector2.new(width, width)
         item.Box.Color = color
@@ -370,11 +496,21 @@ local function drawWorldBomb(camera, model, color, label)
         item.Label.Color = color
         item.Label.Visible = true
     end)
+
+    if okDraw then
+        stateLog("drawing '" .. tostring(inst.Name) .. "' at ("
+            .. tostring(math.floor(screen.X)) .. ", " .. tostring(math.floor(screen.Y))
+            .. ") Z=" .. tostring(math.floor(screen.Z)))
+    else
+        stateLog("draw failed - Drawing write error on '" .. tostring(inst.Name) .. "'")
+        hideItem("World")
+    end
 end
 
--- Cache the expensive workspace scans. The recursive scan must NOT run
--- every frame - it walks the whole Workspace tree and tanks performance.
--- Results are refreshed on a timer instead.
+-- ==========================================================
+-- Caching
+-- ==========================================================
+-- The workspace scans must NOT run every frame - they walk the whole tree.
 local cache = {
     carrier = nil,
     carrierValid = false,
@@ -414,52 +550,26 @@ local function getWorldBombCached()
     return cache.worldBomb
 end
 
-local lastCarrierState = false
-local lastBombState = false
-local debugLogged = false
-
+-- ==========================================================
+-- Update loop
+-- ==========================================================
 local function update()
     if not storedConfig then return end
 
-    -- Default to enabled if not explicitly disabled
     local enabled = storedConfig.C4_ESP_ENABLED
     if enabled == nil then enabled = true end
 
-    -- One-shot diagnostics so it is clear whether the feature is on and how
-    -- many characters were inspected for the bomb.
-    if not debugLogged then
-        debugLogged = true
-        pcall(function()
-            local chars = Workspace:FindFirstChild("Characters")
-            local n = chars and #chars:GetChildren() or 0
-            warn("[Bloxstrike] C4 ESP: enabled=" .. tostring(enabled)
-                .. " charactersFolder=" .. tostring(chars ~= nil)
-                .. " characters=" .. tostring(n))
-
-            if chars then
-                for _, c in ipairs(chars:GetChildren()) do
-                    local names = {}
-                    for _, d in ipairs(c:GetDescendants()) do
-                        local ln = d.Name:lower()
-                        if ln:find("bomb", 1, true) or ln:find("c4", 1, true) then
-                            table.insert(names, d.Name)
-                        end
-                    end
-                    if #names > 0 then
-                        warn("[Bloxstrike] C4 ESP: '" .. tostring(c.Name)
-                            .. "' has bomb parts: " .. table.concat(names, ", "))
-                    end
-                end
-            end
-        end)
-    end
-
     if not enabled then
         hideAll()
+        ensureDebugLabel()
+        pcall(function()
+            if debugText then debugText.Visible = false end
+        end)
+        lastState = ""
         return
     end
 
-    local camera = getCamera()
+    local camera = Workspace.CurrentCamera
     if not camera then
         hideAll()
         return
@@ -467,32 +577,12 @@ local function update()
 
     local color = Color3.fromRGB(255, 70, 70)
 
-    -- Use cached scans instead of scanning every frame
     local carrier = getCarrierCached()
-
-    -- One-shot console message when the carrier appears. C4ESP has no
-    -- reference to the UI library, so this uses warn() - it shows up in the
-    -- executor console (F9) and confirms the detection actually fired.
-    if carrier and (not lastCarrierState) then
-        pcall(function()
-            local nm = carrier.Name
-            local pl = Players:FindFirstChild(nm)
-            if pl and pl.DisplayName then nm = pl.DisplayName end
-            warn("[Bloxstrike] C4 ESP carrier detected: " .. tostring(nm))
-        end)
-    end
-    lastCarrierState = carrier and true or false
 
     if carrier then
         drawCarrier(camera, carrier, color)
     else
-        local carrierItem = C4ESP.Items["Carrier"]
-        if carrierItem then
-            pcall(function()
-                carrierItem.Box.Visible = false
-                carrierItem.Label.Visible = false
-            end)
-        end
+        hideItem("Carrier")
     end
 
     local planted, timer = bombAttributes()
@@ -503,47 +593,28 @@ local function update()
     ensureDebugLabel()
     pcall(function()
         if debugText then
-            debugText.Visible = (enabled == true)
-            if debugText.Visible then
-                debugText.Text = string.format(
-                    "C4 ESP\nenabled=%s\ncarrier=%s\nbomb=%s",
-                    tostring(enabled),
-                    tostring(carrier and carrier.Name),
-                    tostring(worldBomb and worldBomb.Name)
-                )
-            end
+            debugText.Visible = true
+            debugText.Text = string.format(
+                "C4 ESP  enabled=%s\ncarrier=%s\nbomb=%s",
+                tostring(enabled),
+                tostring(carrier and carrier.Name) or "none",
+                tostring(worldBomb and worldBomb.Name) or "none"
+            )
         end
     end)
 
-    -- One-shot console message when the world (dropped) bomb is found
-    if worldBomb and (not lastBombState) then
-        pcall(function()
-            warn("[Bloxstrike] C4 ESP world bomb detected: " .. tostring(worldBomb.Name)
-                .. " (parent: " .. tostring(worldBomb.Parent and worldBomb.Parent.Name) .. ")")
-        end)
-    end
-    lastBombState = worldBomb and true or false
-
     if worldBomb then
         local label
-
         if planted then
             label = string.format("C4 Planted  %.0fs", timer)
         else
             label = "C4 Dropped"
         end
 
-        -- Confirms update() reaches the draw call at all
-        drawLog("update -> calling drawWorldBomb for " .. tostring(worldBomb.Name))
         drawWorldBomb(camera, worldBomb, color, label)
     else
-        local worldItem = C4ESP.Items["World"]
-        if worldItem then
-            pcall(function()
-                worldItem.Box.Visible = false
-                worldItem.Label.Visible = false
-            end)
-        end
+        hideItem("World")
+        stateLog("no bomb instance found in workspace yet")
     end
 end
 
@@ -566,6 +637,11 @@ function C4ESP.cleanup()
 
     hideAll()
 
+    if debugText then
+        pcall(function() debugText:Remove() end)
+        debugText = nil
+    end
+
     for key, item in pairs(C4ESP.Items) do
         pcall(function()
             item.Box:Remove()
@@ -573,6 +649,12 @@ function C4ESP.cleanup()
         end)
         C4ESP.Items[key] = nil
     end
+
+    cache.carrier = nil
+    cache.carrierValid = false
+    cache.worldBomb = nil
+    cache.worldBombValid = false
+    lastState = ""
 
     storedConfig = nil
     C4ESP.Initialized = false

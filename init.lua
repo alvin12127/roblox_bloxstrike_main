@@ -31,39 +31,49 @@ local modules = {}
 local function import(moduleName)
     if modules[moduleName] then return modules[moduleName] end
     
+    -- Run a chunk and return its result, or nil if it fails. A module that
+    -- throws must not abort the whole loader.
+    local function tryRun(fn)
+        if type(fn) ~= "function" then return nil end
+        local ok, res = pcall(fn)
+        if ok and res then return res end
+        return nil
+    end
+
     if type(readfile) == "function" then
         local paths = {
+            "roblox_bloxstrike_main/src/" .. moduleName .. ".lua",
             "Bloxstrike/src/" .. moduleName .. ".lua",
             "src/" .. moduleName .. ".lua",
             moduleName .. ".lua"
         }
         for _, path in ipairs(paths) do
             local ok, content = pcall(readfile, path)
-            if ok and content then
-                local fn, loadErr = loadstring(content)
-                if fn then
-                    local res = fn()
+            if ok and content and #content > 0 then
+                local res = tryRun(loadstring(content))
+                if res then
                     modules[moduleName] = res
                     return res
                 end
             end
         end
     end
-    
+
     if _G.__BloxstrikeModules and _G.__BloxstrikeModules[moduleName] then
-        local res = _G.__BloxstrikeModules[moduleName]()
-        modules[moduleName] = res
-        return res
+        local res = tryRun(_G.__BloxstrikeModules[moduleName])
+        if res then
+            modules[moduleName] = res
+            return res
+        end
     end
-    
+
     -- remote github fallback (timestamped so the executor never serves a stale copy)
     local okHttp, remoteContent = pcall(function()
         return game:HttpGet("https://raw.githubusercontent.com/alvin12127/roblox_bloxstrike_main/main/src/" .. moduleName .. ".lua?t=" .. tostring(os.time()))
     end)
     if okHttp and remoteContent and #remoteContent > 0 then
-        local fn, loadErr = loadstring(remoteContent)
-        if fn then
-            local res = fn()
+        local res = tryRun(loadstring(remoteContent))
+        if res then
             modules[moduleName] = res
             return res
         end
@@ -88,6 +98,7 @@ local WeaponEngine     = import("WeaponEngine")
 local HitSound         = import("HitSound")
 local BulletTracer     = import("BulletTracer")
 local C4ESP           = import("C4ESP")
+local GrenadeESP      = import("GrenadeESP")
 local SpinBot          = import("SpinBot")
 local ThirdPerson      = import("ThirdPerson")
 local WorldMods        = import("WorldMods")
@@ -96,7 +107,21 @@ local InstantReload    = import("InstantReload")
 local UIManager        = import("UIManager")
 
 -- Load arvn UI library
-local Arvn = loadstring(game:HttpGet("https://raw.githubusercontent.com/koteqjjjj/arvn/main/arvn.lua"))()
+-- arvn UI library. Without it there is no menu, so load it before anything
+-- that expects Config/UIManager to be usable.
+local Arvn = nil
+do
+    local okArvn, arvnErr = pcall(function()
+        local src = game:HttpGet("https://raw.githubusercontent.com/koteqjjjj/arvn/main/arvn.lua")
+        local chunk = loadstring(src)
+        if not chunk then error("loadstring returned nil") end
+        return chunk()
+    end)
+    Arvn = (okArvn and type(Arvn) == "table") and Arvn or nil
+    if not Arvn then
+        error("[Bloxstrike] Failed to load the arvn UI library: " .. tostring(arvnErr))
+    end
+end
 
 -- load config
 Config.load()
@@ -132,6 +157,7 @@ local function reportInit(name, func)
 end
 
 reportInit("C4ESP", function() C4ESP.init(Config) end)
+reportInit("GrenadeESP", function() GrenadeESP.init(Config) end)
 reportInit("SpinBot", function() SpinBot.init(Config) end)
 reportInit("ThirdPerson", function() ThirdPerson.init(Config) end)
 reportInit("WorldMods", function() WorldMods.init(Config) end)
@@ -158,6 +184,7 @@ local function cleanup()
     WeaponEngine.cleanup()
     WorldMods.cleanup()
     C4ESP.cleanup()
+    GrenadeESP.cleanup()
     SpinBot.cleanup()
     ThirdPerson.cleanup()
     BulletTracer.cleanup()
@@ -175,10 +202,14 @@ local function cleanup()
     Chams.cleanup()
     InstantReload.cleanup()
 
-    -- Cleanup skinchanger (UI + engine)
+    -- Cleanup skinchanger (catalogs + engine). The catalogs own 3D viewport
+    -- RenderStepped connections, so they must be torn down explicitly.
     if SkinChanger then
-        if SkinChanger.UIManager and SkinChanger.UIManager.cleanup then
-            pcall(SkinChanger.UIManager.cleanup)
+        for _, key in ipairs({ "KnifeCatalog", "GunCatalog", "GloveCatalog" }) do
+            local catalog = SkinChanger[key]
+            if catalog and type(catalog.cleanup) == "function" then
+                pcall(catalog.cleanup)
+            end
         end
         if SkinChanger.API and SkinChanger.API.cleanup then
             pcall(SkinChanger.API.cleanup)
@@ -202,20 +233,27 @@ reportInit("SkinChanger", function()
     local function scImport(moduleName)
         if scModules[moduleName] then return scModules[moduleName] end
 
-        local paths = {
+        -- Resolve the skinchanger modules from the roblox_bloxstrike_SC repo.
+        -- Local readfile paths cover the common layouts, then GitHub is used as
+        -- the fallback so a single pasted loader line still works.
+        local localPaths = {
             "roblox_bloxstrike_SC/src/" .. moduleName .. ".lua",
             "Bloxstrike-Skinchanger/src/" .. moduleName .. ".lua",
+            "src/" .. moduleName .. ".lua",
+            moduleName .. ".lua",
         }
-        
+
         if type(readfile) == "function" then
-            for _, path in ipairs(paths) do
+            for _, path in ipairs(localPaths) do
                 local ok, content = pcall(readfile, path)
-                if ok and content then
+                if ok and content and #content > 0 then
                     local fn = loadstring(content)
                     if fn then
-                        local res = fn()
-                        scModules[moduleName] = res
-                        return res
+                        local okRun, res = pcall(fn)
+                        if okRun and res then
+                            scModules[moduleName] = res
+                            return res
+                        end
                     end
                 end
             end
@@ -228,9 +266,11 @@ reportInit("SkinChanger", function()
         if okHttp and remoteContent and #remoteContent > 0 then
             local fn = loadstring(remoteContent)
             if fn then
-                local res = fn()
-                scModules[moduleName] = res
-                return res
+                local okRun, res = pcall(fn)
+                if okRun and res then
+                    scModules[moduleName] = res
+                    return res
+                end
             end
         end
 
@@ -251,11 +291,16 @@ reportInit("SkinChanger", function()
     end
     scAPI.init()
 
-    -- Expose everything the main UI needs to render the catalogs
+    -- Expose everything the main UI needs to render the catalogs.
+    -- The catalogs' init is deliberately NOT called here: the main UI owns the
+    -- skin tab and calls init itself with a TabFrame living inside the arvn
+    -- window. Calling init twice would build two sets of 3D viewports and leak
+    -- their RenderStepped connections.
     SkinChanger = {
         API = scAPI,
         Database = scDatabase,
         Config = scConfig,
+        Engine = scEngine,
         KnifeCatalog = scKnifeCatalog,
         GunCatalog = scGunCatalog,
         GloveCatalog = scGloveCatalog

@@ -1,4 +1,4 @@
-﻿config.json
+config.json
 *.log
 
 # local verification harness (not part of the cheat)

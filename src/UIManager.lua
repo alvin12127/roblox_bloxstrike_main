@@ -370,6 +370,26 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
         Callback = function(on) updateSetting("C4_ESP_ENABLED", on) end
     })
     VisualSettings:Toggle({
+        Name = "Grenade ESP",
+        Default = (Config.GRENADE_ESP_ENABLED == true),
+        Description = "Marks dropped grenades / utility with distance",
+        Callback = function(on) updateSetting("GRENADE_ESP_ENABLED", on) end
+    })
+    VisualSettings:Slider({
+        Name = "Grenade box size",
+        Min = 8, Max = 60,
+        Default = Config.GRENADE_ESP_BOX_SIZE or 26,
+        Suffix = "px",
+        Callback = function(v) updateSetting("GRENADE_ESP_BOX_SIZE", v) end
+    })
+    VisualSettings:Slider({
+        Name = "Grenade max distance",
+        Min = 50, Max = 2000, Step = 25,
+        Default = Config.GRENADE_ESP_MAX_DISTANCE or 800,
+        Suffix = "m",
+        Callback = function(v) updateSetting("GRENADE_ESP_MAX_DISTANCE", v) end
+    })
+    VisualSettings:Toggle({
         Name = "Anti-flash",
         Default = (Config.ANTI_FLASH_ENABLED ~= false),
         Description = "Neutralizes blinding white screen flashes",
@@ -811,85 +831,281 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
     -- ==========================================
     -- SKINS TAB (hosts the working skin catalogs with 3D previews)
     -- ==========================================
+    --
+    -- The Knife / Gun / Glove catalogs build their own 3D skin previews and were
+    -- written against LinoriaLib. They require:
+    --   * Library:Create / Library:CreateLabel / Library:AddToRegistry
+    --   * Library:Notify
+    --   * Library.AccentColor / BackgroundColor / OutlineColor / MainColor /
+    --     FontColor / Font
+    --   * Tab.TabFrame (plus the optional Tab.LeftSide / Tab.RightSide)
+    -- arvn implements none of those, so a compatibility shim is installed and the
+    -- catalogs are handed a TabFrame that lives INSIDE this arvn tab. That keeps
+    -- the working catalog architecture and the visual skin picker, but inside the
+    -- single main cheat window.
     local SkinsTab = Main:Tab({Name = "Skins", Icon = "palette"})
-    local SkinsBox = SkinsTab:Section("Skin Changer")
 
-    -- Linoria compatibility shim.
-    -- The Knife / Gun / Glove catalogs call Library:Create and
-    -- Library:CreateLabel, which arvn does not implement. Without these the
-    -- catalogs cannot build their 3D cards at all.
-    if not Arvn.Create then
-        function Arvn:Create(Class, Properties)
-            local obj = Instance.new(Class)
-            if Properties then
-                for k, v in pairs(Properties) do obj[k] = v end
-            end
-            return obj
+    -- arvn theme snapshot, so the catalog chrome matches the main cheat
+    local theme = {}
+    pcall(function() theme = Arvn:GetTheme() end)
+    if type(theme) ~= "table" then theme = {} end
+
+    local function pick(key, fallback)
+        local v = theme[key]
+        if typeof(v) == "Color3" then return v end
+        return fallback
+    end
+
+    local SkinShim = {
+        AccentColor     = pick("Accent",  Color3.fromRGB(90, 155, 255)),
+        BackgroundColor = pick("Card",    Color3.fromRGB(28, 28, 32)),
+        OutlineColor    = pick("Field",   Color3.fromRGB(52, 52, 60)),
+        MainColor       = pick("Hover",   Color3.fromRGB(38, 38, 44)),
+        FontColor       = pick("Text",    Color3.fromRGB(238, 238, 245)),
+        Font            = Enum.Font.Gotham,
+    }
+
+    function SkinShim:Create(Class, Properties)
+        local obj = Instance.new(Class)
+        if Properties then
+            for k, v in pairs(Properties) do obj[k] = v end
+        end
+        return obj
+    end
+
+    function SkinShim:CreateLabel(Properties)
+        local label = Instance.new("TextLabel")
+        label.BackgroundTransparency = 1
+        label.BorderSizePixel = 0
+        label.Font = Enum.Font.GothamMedium
+        label.FontSize = 14
+        label.Text = ""
+        label.TextColor3 = SkinShim.FontColor
+        if Properties then
+            for k, v in pairs(Properties) do label[k] = v end
+        end
+        return label
+    end
+
+    -- Linoria uses this to live-update colours when the theme changes. arvn
+    -- rebuilds its own chrome, so a no-op is enough to keep the catalogs alive.
+    function SkinShim:AddToRegistry() end
+
+    function SkinShim:Notify(content)
+        if type(content) == "table" then
+            return Arvn:Notify(content)
+        end
+        return Arvn:Notify({
+            Title = "Skinchanger",
+            Content = tostring(content),
+            Kind = "Success"
+        })
+    end
+
+    local SC_CATALOGS = {
+        { key = "KnifeCatalog", label = "Knives" },
+        { key = "GunCatalog",   label = "Guns" },
+        { key = "GloveCatalog", label = "Gloves" },
+    }
+
+    local PANEL_HEIGHT = 420
+    local skinsState = { holder = nil, built = false }
+
+    local function refreshSkins()
+        local sc = SkinChanger and SkinChanger.API
+        if sc and sc.refresh then pcall(sc.refresh) end
+        for _, entry in ipairs(SC_CATALOGS) do
+            local catalog = SkinChanger and SkinChanger[entry.key]
+            if catalog and catalog.refresh then pcall(catalog.refresh) end
         end
     end
 
-    if not Arvn.CreateLabel then
-        function Arvn:CreateLabel(Properties)
-            local label = Instance.new("TextLabel")
-            label.BackgroundTransparency = 1
-            label.Font = Enum.Font.GothamMedium
-            label.TextSize = 14
-            label.TextColor3 = Arvn.FontColor or Color3.fromRGB(250, 250, 250)
-            if Properties then
-                for k, v in pairs(Properties) do label[k] = v end
-            end
-            return label
+    local function buildSkinsPage(holder)
+        -- arvn rebuilds its whole window on theme / metric changes, which destroys
+        -- the old holder and runs this again. Skip while the previous build is
+        -- still alive so the 3D viewports are not rebuilt needlessly.
+        if skinsState.holder and skinsState.holder.Parent then return end
+        skinsState.holder = holder
+        skinsState.built = true
+
+        local scAPI = SkinChanger and SkinChanger.API
+        local scConfig = SkinChanger and SkinChanger.Config
+        local scDb = SkinChanger and SkinChanger.Database
+
+        if not scAPI or not scConfig or not scDb then
+            SkinShim:CreateLabel({
+                Size = UDim2.new(1, 0, 0, 24),
+                Text = "Skinchanger modules failed to load - check the executor console.",
+                TextColor3 = Color3.fromRGB(255, 90, 90),
+                TextSize = 13,
+                Parent = holder
+            })
+            return
         end
-    end
 
-    -- One enlarged label row per catalog; each becomes the TabFrame that the
-    -- catalog renders its 3D cards into.
-    local function makeHost(height)
-        local lbl = nil
-        pcall(function() lbl = SkinsBox:AddLabel("") end)
-        pcall(function()
-            if lbl and lbl.Root then
-                lbl.Root.Size = UDim2.new(1, 0, 0, height)
-            end
-        end)
-        return (lbl and lbl.Root) or nil
-    end
+        -- ---------- toolbar ----------
+        local bar = SkinShim:Create("Frame", {
+            BackgroundTransparency = 1,
+            Size = UDim2.new(1, 0, 0, 30),
+            ZIndex = 2,
+            Parent = holder
+        })
 
-    local function fakeTab(frame)
-        return { TabFrame = frame, LeftSide = nil, RightSide = nil }
-    end
+        SkinShim:Create("UIListLayout", {
+            FillDirection = Enum.FillDirection.Horizontal,
+            HorizontalAlignment = Enum.HorizontalAlignment.Left,
+            Padding = UDim.new(0, 6),
+            SortOrder = Enum.SortOrder.LayoutOrder,
+            Parent = bar
+        })
 
-    if SkinChanger then
-        local scAPI = SkinChanger.API
-        local scConfig = SkinChanger.Config
-        local scDb = SkinChanger.Database
+        local navButtons = {}
+        local panels = {}
 
-        if SkinChanger.KnifeCatalog and SkinChanger.KnifeCatalog.init then
-            pcall(SkinChanger.KnifeCatalog.init,
-                fakeTab(makeHost(300)), scConfig, scAPI, Arvn, scDb)
+        for index, entry in ipairs(SC_CATALOGS) do
+            local button = SkinShim:Create("TextButton", {
+                BackgroundColor3 = (index == 1) and SkinShim.AccentColor or SkinShim.MainColor,
+                BorderColor3 = SkinShim.OutlineColor,
+                BorderSizePixel = 0,
+                Size = UDim2.new(0, 104, 1, 0),
+                Text = entry.label,
+                TextColor3 = SkinShim.FontColor,
+                TextSize = 13,
+                Font = Enum.Font.GothamSemibold,
+                LayoutOrder = index,
+                ZIndex = 3,
+                Parent = bar
+            })
+
+            SkinShim:Create("UICorner", {
+                CornerRadius = UDim.new(0, 6),
+                Parent = button
+            })
+
+            navButtons[index] = button
+
+            panels[index] = SkinShim:Create("Frame", {
+                BackgroundTransparency = 1,
+                Position = UDim2.new(0, 0, 0, 34),
+                Size = UDim2.new(1, 0, 0, PANEL_HEIGHT),
+                Visible = (index == 1),
+                ZIndex = 2,
+                Parent = holder
+            })
+
+            button.MouseButton1Click:Connect(function()
+                for i = 1, #SC_CATALOGS do
+                    if panels[i] then panels[i].Visible = (i == index) end
+                    if navButtons[i] then
+                        navButtons[i].BackgroundColor3 =
+                            (i == index) and SkinShim.AccentColor or SkinShim.MainColor
+                    end
+                end
+            end)
         end
-        if SkinChanger.GunCatalog and SkinChanger.GunCatalog.init then
-            pcall(SkinChanger.GunCatalog.init,
-                fakeTab(makeHost(300)), scConfig, scAPI, Arvn, scDb)
-        end
-        if SkinChanger.GloveCatalog and SkinChanger.GloveCatalog.init then
-            pcall(SkinChanger.GloveCatalog.init,
-                fakeTab(makeHost(240)), scConfig, scAPI, Arvn, scDb)
-        end
-    end
 
-    SkinsBox:Button({
-        Name = "Refresh Skins",
-        Callback = function()
-            local sc = (SkinChanger and SkinChanger.API) or _G.SkinChanger
-            if sc and sc.refresh then
-                pcall(sc.refresh)
-                Arvn:Notify({Title = "Skinchanger", Content = "Refreshed!", Kind = "Success"})
+        -- ---------- preset / action row ----------
+        local actions = {
+            { "All Special", "setAllSpecial" },
+            { "All Random", "setAllRandom" },
+            { "All Default", "setAllDefault" },
+            { "Reroll", "rerollRandom" },
+            { "Refresh", nil },
+        }
+
+        local actionBar = SkinShim:Create("Frame", {
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0, 0, 0, 34),
+            Size = UDim2.new(1, 0, 0, 28),
+            ZIndex = 2,
+            Parent = holder
+        })
+
+        SkinShim:Create("UIListLayout", {
+            FillDirection = Enum.FillDirection.Horizontal,
+            HorizontalAlignment = Enum.HorizontalAlignment.Left,
+            Padding = UDim.new(0, 6),
+            SortOrder = Enum.SortOrder.LayoutOrder,
+            Parent = actionBar
+        })
+
+        for index, action in ipairs(actions) do
+            local button = SkinShim:Create("TextButton", {
+                BackgroundColor3 = SkinShim.MainColor,
+                BorderColor3 = SkinShim.OutlineColor,
+                BorderSizePixel = 0,
+                Size = UDim2.new(0, 92, 1, 0),
+                Text = action[1],
+                TextColor3 = SkinShim.FontColor,
+                TextSize = 12,
+                Font = Enum.Font.Gotham,
+                LayoutOrder = index,
+                ZIndex = 3,
+                Parent = actionBar
+            })
+
+            SkinShim:Create("UICorner", {
+                CornerRadius = UDim.new(0, 6),
+                Parent = button
+            })
+
+            button.MouseButton1Click:Connect(function()
+                if action[2] then
+                    if scAPI[action[2]] then pcall(scAPI[action[2]]) end
+                end
+                refreshSkins()
+                SkinShim:Notify(action[1] .. " applied")
+            end)
+        end
+
+        -- ---------- the actual catalogs ----------
+        for index, entry in ipairs(SC_CATALOGS) do
+            local catalog = SkinChanger and SkinChanger[entry.key]
+
+            if catalog and type(catalog.init) == "function" then
+                -- Drop the 3D viewport connections from the previous build first
+                if type(catalog.cleanup) == "function" then pcall(catalog.cleanup) end
+                catalog.Initialized = false
+                catalog.CurrentView = "Models"
+
+                local fakeTab = {
+                    TabFrame = panels[index],
+                    LeftSide = nil,
+                    RightSide = nil
+                }
+
+                local ok, err = pcall(catalog.init, fakeTab, scConfig, scAPI, SkinShim, scDb)
+                if not ok then
+                    warn("[Bloxstrike] " .. entry.key .. " failed to build: " .. tostring(err))
+                end
             else
-                Arvn:Notify({Title = "Skinchanger", Content = "Not loaded yet", Kind = "Error"})
+                SkinShim:CreateLabel({
+                    Size = UDim2.new(1, 0, 0, 24),
+                    Text = entry.label .. " catalog unavailable.",
+                    TextColor3 = Color3.fromRGB(255, 90, 90),
+                    TextSize = 13,
+                    Parent = panels[index]
+                })
             end
         end
-    })
+    end
+
+    -- CustomPage gives a full-bleed holder inside the tab. Fall back to a tall
+    -- Custom row if an older arvn build ever lacks it.
+    if type(SkinsTab.CustomPage) == "function" then
+        SkinsTab:CustomPage(function(holder)
+            pcall(buildSkinsPage, holder)
+        end)
+    else
+        local skinsSection = SkinsTab:Section("Skin Changer")
+        skinsSection:Custom({
+            Name = "",
+            Height = 560,
+            Build = function(holder)
+                pcall(buildSkinsPage, holder)
+            end
+        })
+    end
 
     -- ==========================================
     -- SETTINGS TAB
@@ -995,7 +1211,12 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
     end
 
     local bindInputBegan = UserInputService.InputBegan:Connect(function(input, gameProcessed)
-        if Arvn and Arvn.IsPickingKey then return end
+        -- Never steal a keystroke while the menu is open or arvn is capturing a
+        -- new keybind. arvn exposes IsOpen()/Toggle() but has no IsPickingKey(),
+        -- so the open check is what guards the capture flow.
+        pcall(function()
+            if UIManager.Window and UIManager.Window:IsOpen() then return end
+        end)
         if UserInputService:GetFocusedTextBox() then return end
 
         if matchesAimKey(input) then
@@ -1012,8 +1233,8 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
     -- Show menu on startup
     if Config.MENU_OPEN ~= false then
         pcall(function()
-            if (not Arvn.Toggled) and Arvn.Toggle then
-                Arvn:Toggle()
+            if Arvn.Toggle then
+                Arvn:Toggle(true)
             end
         end)
     end
@@ -1027,9 +1248,10 @@ function UIManager.cleanup()
     end
     UIManager.Connections = {}
 
+    -- Close the window so the cheat leaves nothing on screen behind it
     local Arvn = UIManager.Library
-    if Arvn and Arvn.Toggled then
-        pcall(Arvn.Toggle, Arvn)
+    if Arvn and Arvn.Toggle then
+        pcall(function() Arvn:Toggle(false) end)
     end
 
     UIManager.Library = nil
