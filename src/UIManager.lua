@@ -534,6 +534,12 @@ function UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, unloadCallback,
         Description = "Automatically strafes in the air",
         Callback = function(on) updateSetting("BHOP_AUTO_STRAFE", on) end
     })
+    MoveMain:Toggle({
+        Name = "Fake duck",
+        Default = (Config.FAKE_DUCK_ENABLED == true),
+        Description = "Keep full walking speed while crouched (the crouch pose stays)",
+        Callback = function(on) updateSetting("FAKE_DUCK_ENABLED", on) end
+    })
     MoveMain:Slider({
         Name = "Strafe force",
         Min = 0.5, Max = 10, Default = Config.BHOP_STRAFE_FORCE or 2,

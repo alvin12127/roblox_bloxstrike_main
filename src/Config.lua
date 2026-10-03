@@ -75,6 +75,7 @@ local Config = {
 
     -- movement
     BHOP_ENABLED = true,
+    FAKE_DUCK_ENABLED = false,
     BHOP_AUTO_JUMP = true,
     BHOP_AUTO_STRAFE = true,
     BHOP_STRAFE_FORCE = 2,
@@ -273,6 +274,7 @@ local DEFAULT_VALUES = {
     OCCLUSION_CHECK_ENABLED = true,
     SPECTATE_CHECKER_ENABLED = true,
     BHOP_ENABLED = true,
+    FAKE_DUCK_ENABLED = false,
     BHOP_AUTO_JUMP = true,
     BHOP_AUTO_STRAFE = true,
     BHOP_STRAFE_FORCE = 2,
@@ -564,6 +566,7 @@ function Config.save()
         SPECTATE_CHECKER_ENABLED = Config.SPECTATE_CHECKER_ENABLED,
 
         BHOP_ENABLED = Config.BHOP_ENABLED,
+    FAKE_DUCK_ENABLED = Config.FAKE_DUCK_ENABLED,
         BHOP_AUTO_JUMP = (Config.BHOP_AUTO_JUMP ~= false),
         BHOP_AUTO_STRAFE = (Config.BHOP_AUTO_STRAFE ~= false),
         BHOP_STRAFE_FORCE = Config.BHOP_STRAFE_FORCE or 2,

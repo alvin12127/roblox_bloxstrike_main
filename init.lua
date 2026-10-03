@@ -110,6 +110,7 @@ local SilentAim        = import("SilentAim")
 local Wallbang         = import("Wallbang")
 local SpectateChecker  = import("SpectateChecker")
 local Bhop             = import("Bhop")
+local FakeDuck         = import("FakeDuck")
 local AntiFlash        = import("AntiFlash")
 local WeaponEngine     = import("WeaponEngine")
 local HitSound         = import("HitSound")
@@ -182,6 +183,7 @@ end
 reportInit("C4ESP", function() C4ESP.init(Config) end)
 reportInit("GrenadeESP", function() GrenadeESP.init(Config) end)
 reportInit("SpinBot", function() SpinBot.init(Config) end)
+reportInit("FakeDuck", function() FakeDuck.init(Config) end)
 reportInit("ThirdPerson", function() ThirdPerson.init(Config) end)
 reportInit("WorldMods", function() WorldMods.init(Config) end)
 reportInit("BulletTracer", function() BulletTracer.init(Config) end)
@@ -316,20 +318,33 @@ reportInit("SkinChanger", function()
     _G.__bloxstrikeSkinsLib = scSkinsLib
 
     -- Draw the resolver result on screen so a mismatch is visible even when the
-    -- executor console is filtered.
+    -- executor console is filtered. Two lines, because the report now carries the
+    -- preview-probe result as well and a single truncated line hid exactly the
+    -- information needed.
     do
         local line = (scSkinsLib and scSkinsLib.Report)
             and scSkinsLib:Report() or "SkinsLib missing"
+
+        -- Split on the first "  fns:" boundary if there is one, so the path and the
+        -- probe verdict each get a full line.
+        local head, tail = tostring(line):match("^(.-)(  fns:.*)$")
+        if not head then head, tail = tostring(line), "" end
+
         pcall(warn, "[Bloxstrike] " .. tostring(line))
+
         pcall(function()
-            local label = Drawing.new("Text")
-            label.Size = 13
-            label.Outline = true
-            label.Color = Color3.fromRGB(255, 230, 120)
-            label.Position = Vector2.new(16, 260)
-            label.Visible = true
-            label.Text = string.sub(tostring(line), 1, 110)
-            _G.__bloxstrikeSkinsInfo = label
+            for i, text in ipairs({ head, tail }) do
+                if text ~= "" then
+                    local label = Drawing.new("Text")
+                    label.Size = 14
+                    label.Outline = true
+                    label.Center = false
+                    label.Color = Color3.fromRGB(255, 230, 120)
+                    label.Position = Vector2.new(16, 260 + (i - 1) * 20)
+                    label.Visible = true
+                    label.Text = string.sub(text, 1, 150)
+                end
+            end
         end)
     end
 
