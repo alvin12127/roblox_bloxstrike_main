@@ -1025,33 +1025,63 @@ end
 -- ==========================================================
 -- Draw
 -- ==========================================================
+-- Draw the carrier's name above their head.
+--
+-- Returns true when it actually drew the label. When the rig is off screen or
+-- has no head part, the caller falls back to the world marker, which produces the
+-- edge arrow and still carries the carrier's name - so an off-screen carrier is
+-- never left without an indicator just because the rig was found.
 local function drawCarrier(camera, character, color)
     local item = makeItem("Carrier")
-    if not item then return end
+    if not item then return false end
 
-    local part = character:FindFirstChild("Head") or character:FindFirstChild("UpperTorso")
+    local part = nil
+    pcall(function()
+        part = character:FindFirstChild("Head") or character:FindFirstChild("UpperTorso")
+    end)
     if not part then
         hideItem("Carrier")
-        return
+        return false
     end
 
-    local ok, screen = pcall(camera.WorldToViewportPoint, camera, part.Position + Vector3.new(0, 2, 0))
-
-    if (not ok) or (not screen) or (screen.Z <= 0) then
+    local headPos = nil
+    pcall(function() headPos = part.Position end)
+    if not headPos then
         hideItem("Carrier")
-        return
+        return false
     end
 
-    local player = Players:FindFirstChild(character.Name)
-    local shown = (player and player.DisplayName) or character.Name
+    local ok, screen = pcall(camera.WorldToViewportPoint, camera, headPos + Vector3.new(0, 2, 0))
 
-    pcall(function()
+    if (not ok) or (not screen) then
+        hideItem("Carrier")
+        return false
+    end
+
+    local viewport = camera.ViewportSize
+    if screen.Z <= 0
+        or screen.X < 0 or screen.Y < 0
+        or screen.X > viewport.X or screen.Y > viewport.Y then
+        hideItem("Carrier")
+        return false
+    end
+
+    local player = nil
+    pcall(function() player = Players:FindFirstChild(character.Name) end)
+    local shown = nil
+    pcall(function() shown = (player and player.DisplayName) or character.Name end)
+
+    local drawn = pcall(function()
         item.Label.Text = "C4 Carrier: " .. tostring(shown)
+        item.Label.Size = 16
         item.Label.Position = Vector2.new(screen.X, screen.Y)
         item.Label.Color = color
         item.Label.Visible = true
         item.Box.Visible = false
+        if item.Arrow then item.Arrow.Visible = false end
     end)
+
+    return drawn == true
 end
 
 -- Project a world position onto the screen. When the point is off screen, or
@@ -1321,13 +1351,25 @@ local function update()
     local carrierName = getCarrierNameCached()
     local carrierChar = getCarrierCharCached()
 
-    if carrierChar then
-        drawCarrier(camera, carrierChar, color)
-    else
-        hideItem("Carrier")
+    -- Still evaluated while carried so the plant latch stays in step with the
+    -- carrier transitions handled in refreshScan.
+    local planted, timer, plantedSite = plantedInfo(worldBomb, resolvePosition(worldBomb, 0))
+
+    -- Exactly ONE marker per state.
+    --
+    -- When the rig is located, the carrier marker above its head is the whole
+    -- story, and the world marker is hidden. The bomb is strapped to that rig, so
+    -- drawing both put two labels within a few pixels of each other and read as
+    -- two separate ESPs on one player. When the rig cannot be located there is
+    -- no carrier marker to draw, so the world marker on the bomb carries the
+    -- label instead - which is why the fallback path still reports the carrier by
+    -- name.
+    if carrierChar and drawCarrier(camera, carrierChar, color) then
+        hideItem("World")
+        return
     end
 
-    local planted, timer, plantedSite = plantedInfo(worldBomb, resolvePosition(worldBomb, 0))
+    hideItem("Carrier")
 
     if worldBomb then
         -- One rule decides the label, using the same scan that located the bomb:
