@@ -347,6 +347,23 @@ reportInit("SkinChanger", function()
                 label.Visible = true
                 label.Text = text
             end
+
+            -- What FakeDuck actually found and changed. Three attempts at this
+            -- feature failed, each on a different wrong assumption, so the module
+            -- reports what it patched instead of the result being inferred from
+            -- whether the speed feels right.
+            local report = nil
+            pcall(function() report = FakeDuck.Report() end)
+            if report then
+                local label = Drawing.new("Text")
+                label.Size = 14
+                label.Outline = true
+                label.Center = false
+                label.Color = Color3.fromRGB(150, 230, 255)
+                label.Position = Vector2.new(16, 260 + 2 * 18)
+                label.Visible = true
+                label.Text = report
+            end
         end)
     end
 
