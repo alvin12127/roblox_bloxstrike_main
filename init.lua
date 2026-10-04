@@ -318,32 +318,34 @@ reportInit("SkinChanger", function()
     _G.__bloxstrikeSkinsLib = scSkinsLib
 
     -- Draw the resolver result on screen so a mismatch is visible even when the
-    -- executor console is filtered. Two lines, because the report now carries the
-    -- preview-probe result as well and a single truncated line hid exactly the
-    -- information needed.
+    -- executor console is filtered. The function list gets one name per line: a
+    -- single joined line was truncated on screen and the cut landed in the middle
+    -- of the one name that mattered.
     do
         local line = (scSkinsLib and scSkinsLib.Report)
             and scSkinsLib:Report() or "SkinsLib missing"
 
-        -- Split on the first "  fns:" boundary if there is one, so the path and the
-        -- probe verdict each get a full line.
-        local head, tail = tostring(line):match("^(.-)(  fns:.*)$")
-        if not head then head, tail = tostring(line), "" end
-
         pcall(warn, "[Bloxstrike] " .. tostring(line))
 
+        local rows = { tostring(line) }
+        if scSkinsLib and scSkinsLib.ReportFns then
+            local ok, list = pcall(function() return scSkinsLib:ReportFns() end)
+            if ok and type(list) == "table" then
+                for _, name in ipairs(list) do rows[#rows + 1] = "  " .. tostring(name) end
+            end
+        end
+
         pcall(function()
-            for i, text in ipairs({ head, tail }) do
-                if text ~= "" then
-                    local label = Drawing.new("Text")
-                    label.Size = 14
-                    label.Outline = true
-                    label.Center = false
-                    label.Color = Color3.fromRGB(255, 230, 120)
-                    label.Position = Vector2.new(16, 260 + (i - 1) * 20)
-                    label.Visible = true
-                    label.Text = string.sub(text, 1, 150)
-                end
+            for i, text in ipairs(rows) do
+                if i > 14 then break end
+                local label = Drawing.new("Text")
+                label.Size = 14
+                label.Outline = true
+                label.Center = false
+                label.Color = Color3.fromRGB(255, 230, 120)
+                label.Position = Vector2.new(16, 260 + (i - 1) * 18)
+                label.Visible = true
+                label.Text = text
             end
         end)
     end
