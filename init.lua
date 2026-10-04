@@ -211,6 +211,7 @@ local function cleanup()
     C4ESP.cleanup()
     GrenadeESP.cleanup()
     SpinBot.cleanup()
+    FakeDuck.cleanup()
     ThirdPerson.cleanup()
     BulletTracer.cleanup()
     HitSound.cleanup()
@@ -322,12 +323,29 @@ reportInit("SkinChanger", function()
     -- single joined line was truncated on screen and the cut landed in the middle
     -- of the one name that mattered.
     do
-        local line = (scSkinsLib and scSkinsLib.Report)
-            and scSkinsLib:Report() or "SkinsLib missing"
+        -- The report is a DIAGNOSTIC. It must never be able to take down the block
+        -- it is reporting on: this call was unprotected, so a single error inside
+        -- SkinsLib.Report aborted SkinChanger init entirely - no catalogs, no
+        -- scAPI.init(), and every readout below this line silently never ran.
+        --
+        -- The error text is put on screen instead of being swallowed, because a
+        -- diagnostic that cannot report its own failure is how a wrong answer
+        -- survives several rounds.
+        local line, reportErr = "SkinsLib missing", nil
+        if scSkinsLib and scSkinsLib.Report then
+            local ok, res = pcall(function() return scSkinsLib:Report() end)
+            if ok then
+                line = tostring(res)
+            else
+                reportErr = tostring(res)
+                line = "SkinsLib Report ERROR: " .. tostring(res)
+            end
+        end
 
         pcall(warn, "[Bloxstrike] " .. tostring(line))
 
         local rows = { tostring(line) }
+        if reportErr then rows[#rows + 1] = "  " .. tostring(reportErr) end
         if scSkinsLib and scSkinsLib.ReportFns then
             local ok, list = pcall(function() return scSkinsLib:ReportFns() end)
             if ok and type(list) == "table" then
