@@ -136,6 +136,25 @@ local function step()
         return
     end
 
+    -- Primary mechanism: clear the flag the game itself uses to apply the crouch
+    -- penalty.
+    --
+    -- The velocity write below was tried first and does not stick: the movement
+    -- simulation re-applies its own cap every physics step, so a client-side
+    -- write is corrected before it is ever seen. That is not a tuning problem, it
+    -- is the wrong layer - the penalty is applied from @IsCrouching, so the only
+    -- thing worth fighting is the flag.
+    --
+    -- Setting it false makes the game treat the player as standing, so no cap is
+    -- applied at all. The accepted trade-off, as requested: the local player then
+    -- also appears to stand, and only locally so. Nothing here touches other
+    -- players, the rig, the animation or the camera.
+    pcall(function()
+        character:SetAttribute("IsCrouching", false)
+    end)
+
+    -- Second layer, kept because it costs nothing and covers a build that caps
+    -- velocity instead of reading the attribute.
     local target = FakeDuck.lastKnownNormal
     if target <= FakeDuck.MIN_MOVING then return end
     if speed >= target then return end
