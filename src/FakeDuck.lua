@@ -100,8 +100,30 @@ end
 --------------------------------------------------------------------
 -- Patch
 --------------------------------------------------------------------
-local patched = {}
 local scanned = false
+
+-- Two lists, because they answer different questions.
+--
+--   seen    - every crouch-named field the last scan found, whatever its value.
+--             This is what proves the scan reached the right table: a field that
+--             shows up here with value 1 or the standing speed has been handled.
+--   applied - only the fields this code actually changed, cumulative.
+--
+-- A single list was wrong. The scan runs every 2 seconds and re-applies from
+-- scratch, so after the first pass it changed nothing and reported "patched=0",
+-- which reads exactly like "found no crouch field at all". The success case and
+-- the total-failure case reported the same string.
+local seen = {}
+local applied = {}
+local appliedSet = {}
+
+local function note(list, set, text)
+    if set then
+        if set[text] then return end
+        set[text] = true
+    end
+    list[#list + 1] = text
+end
 
 -- Walk a module table and neutralise every crouch-named field, in the way that
 -- matches what the field actually is.
@@ -143,18 +165,22 @@ local function patchTable(root, depth)
 
     for _, entry in ipairs(crouchKeys) do
         if isFactor(entry.value) then
+            note(seen, nil, string.format("%s=x%s", tostring(entry.key), tostring(entry.value)))
             if entry.value ~= 1 then
                 local ok = pcall(function() root[entry.key] = 1 end)
                 if ok then
-                    patched[#patched + 1] = string.format("%s x%s->x1",
-                        tostring(entry.key), tostring(entry.value))
+                    note(applied, appliedSet, string.format("%s x%s->x1",
+                        tostring(entry.key), tostring(entry.value)))
                 end
             end
-        elseif fastest and entry.value < fastest then
-            local ok = pcall(function() root[entry.key] = fastest end)
-            if ok then
-                patched[#patched + 1] = string.format("%s %s->%s",
-                    tostring(entry.key), tostring(entry.value), tostring(fastest))
+        elseif fastest then
+            note(seen, nil, string.format("%s=%s", tostring(entry.key), tostring(entry.value)))
+            if entry.value < fastest then
+                local ok = pcall(function() root[entry.key] = fastest end)
+                if ok then
+                    note(applied, appliedSet, string.format("%s %s->%s",
+                        tostring(entry.key), tostring(entry.value), tostring(fastest)))
+                end
             end
         end
     end
@@ -163,7 +189,7 @@ end
 -- Repeated on a slow interval because the game can reassign its own table
 -- between rounds; a patch applied once would be silently reverted.
 local function scanForSpeedTables()
-    patched = {}
+    seen = {}
     local found = 0
 
     for _, path in ipairs(CANDIDATE_PATHS) do
@@ -179,7 +205,7 @@ local function scanForSpeedTables()
     end
 
     scanned = true
-    return found, patched
+    return found
 end
 
 --------------------------------------------------------------------
@@ -287,11 +313,13 @@ local function step()
     end)
 end
 
--- What was patched, for the on-screen report.
+-- What the scan can see, and what it changed. Read off this rather than inferred
+-- from whether the speed feels right.
 FakeDuck.Report = function()
-    local list = #patched > 0 and table.concat(patched, ", ") or "none"
-    return string.format("FakeDuck mods=%d scanned=%s patched=%d [%s]",
-        scanAttempts, tostring(scanned), #patched, list)
+    local seenList = #seen > 0 and table.concat(seen, ",") or "none"
+    local appliedList = #applied > 0 and table.concat(applied, ",") or "none"
+    return string.format("FakeDuck mods=%d scanned=%s found=%d[%s] changed=%d[%s]",
+        scanAttempts, tostring(scanned), #seen, seenList, #applied, appliedList)
 end
 
 function FakeDuck.init(Config)
@@ -322,7 +350,9 @@ function FakeDuck.cleanup()
     end
     FakeDuck.normalSpeed = 0
     FakeDuck.lastKnownNormal = 16
-    patched = {}
+    seen = {}
+    applied = {}
+    appliedSet = {}
     scanned = false
     lastScanAt = -999
     scanAttempts = 0
@@ -331,3 +361,4 @@ function FakeDuck.cleanup()
 end
 
 return FakeDuck
+

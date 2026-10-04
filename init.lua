@@ -373,6 +373,7 @@ reportInit("SkinChanger", function()
             local report = nil
             pcall(function() report = FakeDuck.Report() end)
             if report then
+                pcall(warn, "[Bloxstrike] " .. tostring(report))
                 local label = Drawing.new("Text")
                 label.Size = 14
                 label.Outline = true
