@@ -11,7 +11,6 @@ if _G.__standaloneRCS then pcall(_G.__standaloneRCS) _G.__standaloneRCS = nil en
 if _G.__passiveSuiteJanitor then pcall(_G.__passiveSuiteJanitor) _G.__passiveSuiteJanitor = nil end
 if _G.__antiFlashJanitor then pcall(_G.__antiFlashJanitor) _G.__antiFlashJanitor = nil end
 if _G.__bhopJanitor then pcall(_G.__bhopJanitor) _G.__bhopJanitor = nil end
-if _G.__skinChangerJanitor then pcall(_G.__skinChangerJanitor) _G.__skinChangerJanitor = nil end
 
 if _G.__originalPerformRaycast then
     local ok, b = pcall(function() return require(game:GetService("ReplicatedStorage").Components.Weapon.Classes.Bullet) end)
@@ -33,10 +32,8 @@ local Camera = Workspace.CurrentCamera
 -- URL is built from a table lookup rather than by rewriting game.HttpGet, because
 -- executors do not allow assigning to game members.
 local REPO_MAIN = "alvin12127/roblox_bloxstrike_main"
-local REPO_SC   = "alvin12127/roblox_bloxstrike_SC"
 
 local BRANCH_MAIN = (_G.BloxstrikeBranch or "main")
-local BRANCH_SC   = (_G.BloxstrikeSCBranch or "main")
 
 local function rawUrl(repo, branch, path)
     return "https://raw.githubusercontent.com/" .. repo .. "/" .. branch .. "/" .. path
@@ -110,7 +107,6 @@ local SilentAim        = import("SilentAim")
 local Wallbang         = import("Wallbang")
 local SpectateChecker  = import("SpectateChecker")
 local Bhop             = import("Bhop")
-local FakeDuck         = import("FakeDuck")
 local AntiFlash        = import("AntiFlash")
 local WeaponEngine     = import("WeaponEngine")
 local HitSound         = import("HitSound")
@@ -183,7 +179,6 @@ end
 reportInit("C4ESP", function() C4ESP.init(Config) end)
 reportInit("GrenadeESP", function() GrenadeESP.init(Config) end)
 reportInit("SpinBot", function() SpinBot.init(Config) end)
-reportInit("FakeDuck", function() FakeDuck.init(Config) end)
 reportInit("ThirdPerson", function() ThirdPerson.init(Config) end)
 reportInit("WorldMods", function() WorldMods.init(Config) end)
 reportInit("BulletTracer", function() BulletTracer.init(Config) end)
@@ -199,7 +194,6 @@ reportInit("InstantReload", function() InstantReload.init(Config) end)
 -- cleanup
 local renderConn = nil
 local keyConn = nil
-local SkinChanger = nil
 
 local function cleanup()
     if renderConn then pcall(function() renderConn:Disconnect() end) end
@@ -211,7 +205,6 @@ local function cleanup()
     C4ESP.cleanup()
     GrenadeESP.cleanup()
     SpinBot.cleanup()
-    FakeDuck.cleanup()
     ThirdPerson.cleanup()
     BulletTracer.cleanup()
     HitSound.cleanup()
@@ -228,20 +221,6 @@ local function cleanup()
     Chams.cleanup()
     InstantReload.cleanup()
 
-    -- Cleanup skinchanger (catalogs + engine). The catalogs own 3D viewport
-    -- RenderStepped connections, so they must be torn down explicitly.
-    if SkinChanger then
-        for _, key in ipairs({ "KnifeCatalog", "GunCatalog", "GloveCatalog" }) do
-            local catalog = SkinChanger[key]
-            if catalog and type(catalog.cleanup) == "function" then
-                pcall(catalog.cleanup)
-            end
-        end
-        if SkinChanger.API and SkinChanger.API.cleanup then
-            pcall(SkinChanger.API.cleanup)
-        end
-    end
-    SkinChanger = nil
 
     _G.__bloxstrikeJanitor = nil
     _G.__bloxstrikeConfig = nil
@@ -250,169 +229,10 @@ end
 _G.__bloxstrikeJanitor = cleanup
 _G.__bloxstrikeConfig = Config
 
--- Load the skinchanger engine + catalogs FIRST so the main UI can host them.
--- No separate window is created any more: the catalogs are rendered straight
--- into the main cheat's arvn Skins tab (see UIManager).
-reportInit("SkinChanger", function()
-    -- Skinchanger has its own module directory - load from there
-    local scModules = {}
-    local function scImport(moduleName)
-        if scModules[moduleName] then return scModules[moduleName] end
 
-        -- Resolve the skinchanger modules from the roblox_bloxstrike_SC repo.
-        -- Local readfile paths cover the common layouts, then GitHub is used as
-        -- the fallback so a single pasted loader line still works.
-        local localPaths = {
-            "roblox_bloxstrike_SC/src/" .. moduleName .. ".lua",
-            "Bloxstrike-Skinchanger/src/" .. moduleName .. ".lua",
-            "src/" .. moduleName .. ".lua",
-            moduleName .. ".lua",
-        }
-
-        if type(readfile) == "function" then
-            for _, path in ipairs(localPaths) do
-                local ok, content = pcall(readfile, path)
-                if ok and content and #content > 0 then
-                    local fn = loadstring(content)
-                    if fn then
-                        local okRun, res = pcall(fn)
-                        if okRun and res then
-                            scModules[moduleName] = res
-                            return res
-                        end
-                    end
-                end
-            end
-        end
-
-        -- Remote GitHub fallback
-        local okHttp, remoteContent = pcall(function()
-            return game:HttpGet(rawUrl(REPO_SC, BRANCH_SC,
-            "src/" .. moduleName .. ".lua") .. "?t=" .. tostring(os.time()))
-        end)
-        if okHttp and remoteContent and #remoteContent > 0 then
-            local fn = loadstring(remoteContent)
-            if fn then
-                local okRun, res = pcall(fn)
-                if okRun and res then
-                    scModules[moduleName] = res
-                    return res
-                end
-            end
-        end
-
-        error("[Skinchanger] Failed to import: " .. tostring(moduleName))
-    end
-
-    local scConfig       = scImport("Config")
-    local scDatabase     = scImport("Database")
-    local scEngine       = scImport("Engine")
-    local scAPI          = scImport("API")
-    local scSkinsLib     = scImport("SkinsLib")
-    local scKnifeCatalog = scImport("KnifeCatalog")
-    local scGunCatalog   = scImport("GunCatalog")
-    local scGloveCatalog = scImport("GloveCatalog")
-
-    -- The catalogs read this global. They used to require the game's skin module
-    -- from a hardcoded path that does not exist in this build, which left every
-    -- 3D preview rendering as an empty box.
-    _G.__bloxstrikeSkinsLib = scSkinsLib
-
-    -- Draw the resolver result on screen so a mismatch is visible even when the
-    -- executor console is filtered. The function list gets one name per line: a
-    -- single joined line was truncated on screen and the cut landed in the middle
-    -- of the one name that mattered.
-    do
-        -- The report is a DIAGNOSTIC. It must never be able to take down the block
-        -- it is reporting on: this call was unprotected, so a single error inside
-        -- SkinsLib.Report aborted SkinChanger init entirely - no catalogs, no
-        -- scAPI.init(), and every readout below this line silently never ran.
-        --
-        -- The error text is put on screen instead of being swallowed, because a
-        -- diagnostic that cannot report its own failure is how a wrong answer
-        -- survives several rounds.
-        local line, reportErr = "SkinsLib missing", nil
-        if scSkinsLib and scSkinsLib.Report then
-            local ok, res = pcall(function() return scSkinsLib:Report() end)
-            if ok then
-                line = tostring(res)
-            else
-                reportErr = tostring(res)
-                line = "SkinsLib Report ERROR: " .. tostring(res)
-            end
-        end
-
-        pcall(warn, "[Bloxstrike] " .. tostring(line))
-
-        local rows = { tostring(line) }
-        if reportErr then rows[#rows + 1] = "  " .. tostring(reportErr) end
-        if scSkinsLib and scSkinsLib.ReportFns then
-            local ok, list = pcall(function() return scSkinsLib:ReportFns() end)
-            if ok and type(list) == "table" then
-                for _, name in ipairs(list) do rows[#rows + 1] = "  " .. tostring(name) end
-            end
-        end
-
-        pcall(function()
-            for i, text in ipairs(rows) do
-                if i > 14 then break end
-                local label = Drawing.new("Text")
-                label.Size = 14
-                label.Outline = true
-                label.Center = false
-                label.Color = Color3.fromRGB(255, 230, 120)
-                label.Position = Vector2.new(16, 260 + (i - 1) * 18)
-                label.Visible = true
-                label.Text = text
-            end
-
-            -- What FakeDuck actually found and changed. Three attempts at this
-            -- feature failed, each on a different wrong assumption, so the module
-            -- reports what it patched instead of the result being inferred from
-            -- whether the speed feels right.
-            local report = nil
-            pcall(function() report = FakeDuck.Report() end)
-            if report then
-                pcall(warn, "[Bloxstrike] " .. tostring(report))
-                local label = Drawing.new("Text")
-                label.Size = 14
-                label.Outline = true
-                label.Center = false
-                label.Color = Color3.fromRGB(150, 230, 255)
-                label.Position = Vector2.new(16, 260 + 2 * 18)
-                label.Visible = true
-                label.Text = report
-            end
-        end)
-    end
-
-    scAPI.bind(scConfig, scDatabase, scEngine, scKnifeCatalog, scGunCatalog)
-    if scAPI.bindGloveCatalog then
-        scAPI.bindGloveCatalog(scGloveCatalog)
-    end
-    scAPI.init()
-
-    -- Expose everything the main UI needs to render the catalogs.
-    -- The catalogs' init is deliberately NOT called here: the main UI owns the
-    -- skin tab and calls init itself with a TabFrame living inside the arvn
-    -- window. Calling init twice would build two sets of 3D viewports and leak
-    -- their RenderStepped connections.
-    SkinChanger = {
-        API = scAPI,
-        Database = scDatabase,
-        Config = scConfig,
-        Engine = scEngine,
-        KnifeCatalog = scKnifeCatalog,
-        GunCatalog = scGunCatalog,
-        GloveCatalog = scGloveCatalog
-    }
-
-    _G.SkinChanger = scAPI
-end)
-
--- init ui (main cheat arvn window - hosts the skin catalogs in its Skins tab)
+-- init ui (the main cheat's arvn window)
 reportInit("UIManager", function()
-    UIManager.init(Config, Arvn, SkinChanger, WeaponEngine, cleanup, HitSound)
+    UIManager.init(Config, Arvn, WeaponEngine, cleanup, HitSound)
 end)
 
 -- render loop

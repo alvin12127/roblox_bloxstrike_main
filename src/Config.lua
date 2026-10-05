@@ -75,7 +75,6 @@ local Config = {
 
     -- movement
     BHOP_ENABLED = true,
-    FAKE_DUCK_ENABLED = false,
     BHOP_AUTO_JUMP = true,
     BHOP_AUTO_STRAFE = true,
     BHOP_STRAFE_FORCE = 2,
@@ -167,17 +166,6 @@ local Config = {
     BULLET_TRACER_THICKNESS = 1.5,
     BULLET_TRACER_DURATION = 0.6,
 
-    -- skins
-    AUTO_LAUNCH_SKINCHANGER = false,
-    SKINS_ENABLED = true,
-    KNIFE_SKINS_ENABLED = true,
-    WEAPON_SKINS_ENABLED = true,
-    KNIFE_MODEL = "Butterfly Knife",
-    KNIFE_SKIN = "Special",
-    SELECTED_WEAPON_TYPE = "AK-47",
-    SELECTED_SKINS = {},
-    SKIN_MODE = "Special",
-    EQUIP_BUTTERFLY_KNIFE = true,
 
     -- hit sound
     HITSOUND_ENABLED = false,
@@ -274,7 +262,6 @@ local DEFAULT_VALUES = {
     OCCLUSION_CHECK_ENABLED = true,
     SPECTATE_CHECKER_ENABLED = true,
     BHOP_ENABLED = true,
-    FAKE_DUCK_ENABLED = false,
     BHOP_AUTO_JUMP = true,
     BHOP_AUTO_STRAFE = true,
     BHOP_STRAFE_FORCE = 2,
@@ -292,16 +279,6 @@ local DEFAULT_VALUES = {
     BULLET_TRACER_ENABLED = false,
     BULLET_TRACER_THICKNESS = 1.5,
     BULLET_TRACER_DURATION = 0.6,
-    AUTO_LAUNCH_SKINCHANGER = false,
-    SKINS_ENABLED = true,
-    KNIFE_SKINS_ENABLED = true,
-    WEAPON_SKINS_ENABLED = true,
-    KNIFE_MODEL = "Butterfly Knife",
-    KNIFE_SKIN = "Special",
-    SELECTED_WEAPON_TYPE = "AK-47",
-    SELECTED_SKINS = {},
-    SKIN_MODE = "Special",
-    EQUIP_BUTTERFLY_KNIFE = true,
     HITSOUND_ENABLED = false,
     HITSOUND_VOLUME = 70,
     HITSOUND_FILE = "hvh_crystal_hitsound.mp3",
@@ -566,7 +543,6 @@ function Config.save()
         SPECTATE_CHECKER_ENABLED = Config.SPECTATE_CHECKER_ENABLED,
 
         BHOP_ENABLED = Config.BHOP_ENABLED,
-    FAKE_DUCK_ENABLED = Config.FAKE_DUCK_ENABLED,
         BHOP_AUTO_JUMP = (Config.BHOP_AUTO_JUMP ~= false),
         BHOP_AUTO_STRAFE = (Config.BHOP_AUTO_STRAFE ~= false),
         BHOP_STRAFE_FORCE = Config.BHOP_STRAFE_FORCE or 2,
@@ -600,7 +576,6 @@ function Config.save()
         BULLET_TRACER_ENABLED = (Config.BULLET_TRACER_ENABLED == true),
         BULLET_TRACER_THICKNESS = Config.BULLET_TRACER_THICKNESS or 1.5,
         BULLET_TRACER_DURATION = Config.BULLET_TRACER_DURATION or 0.6,
-        AUTO_LAUNCH_SKINCHANGER = (Config.AUTO_LAUNCH_SKINCHANGER == true),
 
         -- chams
         CHAMS_ENABLED = (Config.CHAMS_ENABLED == true),
@@ -652,16 +627,6 @@ function Config.save()
         SUN_RAYS_SPREAD = Config.SUN_RAYS_SPREAD or 1,
         MOTION_BLUR_ENABLED = (Config.MOTION_BLUR_ENABLED == true),
         MOTION_BLUR_STRENGTH = Config.MOTION_BLUR_STRENGTH or 1,
-
-        SKINS_ENABLED = Config.SKINS_ENABLED,
-        KNIFE_SKINS_ENABLED = Config.KNIFE_SKINS_ENABLED,
-        WEAPON_SKINS_ENABLED = Config.WEAPON_SKINS_ENABLED,
-        KNIFE_MODEL = Config.KNIFE_MODEL or "Butterfly Knife",
-        KNIFE_SKIN = Config.KNIFE_SKIN or "Special",
-        SELECTED_WEAPON_TYPE = Config.SELECTED_WEAPON_TYPE or "AK-47",
-        SELECTED_SKINS = Config.SELECTED_SKINS or {},
-        SKIN_MODE = Config.SKIN_MODE or "Special",
-        EQUIP_BUTTERFLY_KNIFE = Config.EQUIP_BUTTERFLY_KNIFE,
 
         WINDOW_SIZE_X = Config.WINDOW_SIZE_X or 440,
         WINDOW_SIZE_Y = Config.WINDOW_SIZE_Y or 210,
@@ -724,23 +689,6 @@ function Config.load()
             end
         elseif key == "AIM_BIND_MODE" then
             Config.AIM_BIND_MODE = (val == "Hold") and "Hold" or "Toggle"
-        elseif key == "AUTO_LAUNCH_SKINCHANGER" then
-            Config.AUTO_LAUNCH_SKINCHANGER = (val == true)
-        elseif key == "KNIFE_SKINS_ENABLED" then
-            Config.KNIFE_SKINS_ENABLED = (val == true)
-        elseif key == "WEAPON_SKINS_ENABLED" then
-            Config.WEAPON_SKINS_ENABLED = (val == true)
-        elseif key == "SELECTED_WEAPON_TYPE" then
-            Config.SELECTED_WEAPON_TYPE = tostring(val)
-        elseif key == "SELECTED_SKINS" and type(val) == "table" then
-            Config.SELECTED_SKINS = val
-        elseif key == "KNIFE_MODEL" then
-            Config.KNIFE_MODEL = tostring(val)
-        elseif key == "KNIFE_SKIN" then
-            Config.KNIFE_SKIN = tostring(val)
-        elseif key == "SKIN_MODE" then
-            local str = tostring(val)
-            Config.SKIN_MODE = (str == "Random") and "Random" or "Special"
         elseif key == "FOV_DEG" then
             Config.FOV_DEG = tonumber(val) or 30
         elseif key == "FOV_RADIUS" and not data.FOV_DEG then
