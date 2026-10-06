@@ -410,13 +410,77 @@ end
 local indexCache = { value = nil, builtAt = 0 }
 local INDEX_TTL = 0.75
 
+-- ==========================================================
+-- Cost instrumentation
+-- ==========================================================
+--
+-- Two earlier attempts to fix the pickup hitch were made from reading the code and
+-- both were wrong. One removed per-candidate re-walks, the other added this cache -
+-- and the hitch came back, which means the cost was never in either place.
+--
+-- Measuring the instance tree settles the question of where it is NOT: Workspace is
+-- small in this game. Walking Workspace to depth 4 visits ~360 instances and depth 6
+-- visits the same few hundred more, because the 82,631-instance tree is
+-- ReplicatedStorage/Assets, not Workspace. So neither buildIndex nor the shape
+-- fallback can account for a visible hitch at 0.35s intervals.
+--
+-- What that leaves is everything that reacts to the bomb SPAWNING: several
+-- independent RenderStepped connections at once, and the game's own replication of
+-- the new model. Those are only separable by measurement, so this counts them.
+--
+-- max matters more than total here. A hitch is one bad frame, and a module that is
+-- cheap for 59 frames and expensive for one averages out to nothing.
+local stat = {
+    index = { t = 0, n = 0, max = 0 },
+    holster = { t = 0, n = 0, max = 0 },
+    name = { t = 0, n = 0, max = 0 },
+    shape = { t = 0, n = 0, max = 0 },
+    scan = { t = 0, n = 0, max = 0 },
+    draw = { t = 0, n = 0, max = 0 },
+    visits = 0,
+}
+
+local function record(bucket, started)
+    local dt = os.clock() - started
+    local s = stat[bucket]
+    s.t = s.t + dt
+    s.n = s.n + 1
+    if dt > s.max then s.max = dt end
+    return dt
+end
+
+local function ms(sec) return string.format("%.2f", sec * 1000) end
+
+-- Reset every second by the reporter in init.lua, so the numbers describe the window
+-- the user is actually in rather than the whole session.
+function C4ESP.TakeStats()
+    local out = {}
+    for _, key in ipairs({ "scan", "index", "holster", "name", "shape", "draw" }) do
+        local s = stat[key]
+        if s.n > 0 then
+            out[#out + 1] = string.format("%s avg=%s max=%s n=%d",
+                key, ms(s.t / s.n), ms(s.max), s.n)
+        end
+    end
+    stat.index = { t = 0, n = 0, max = 0 }
+    stat.holster = { t = 0, n = 0, max = 0 }
+    stat.name = { t = 0, n = 0, max = 0 }
+    stat.shape = { t = 0, n = 0, max = 0 }
+    stat.scan = { t = 0, n = 0, max = 0 }
+    stat.draw = { t = 0, n = 0, max = 0 }
+    stat.visits = 0
+    return table.concat(out, "  ")
+end
+
 local function getIndex()
     local now = os.clock()
     if indexCache.value and ((now - indexCache.builtAt) < INDEX_TTL) then
         return indexCache.value
     end
+    local started = os.clock()
     indexCache.value = buildIndex()
     indexCache.builtAt = now
+    record("index", started)
     return indexCache.value
 end
 
@@ -507,6 +571,7 @@ end
 --
 -- Returns: holster, holderName, holderCharacter
 local function scanForBomb()
+    local scanStarted = os.clock()
     local index = getIndex()
 
     -- 1. A bomb inside a "<Player>_Weapon..." folder.
@@ -516,6 +581,7 @@ local function scanForBomb()
     --    carrier.
     local bestHolster, bestOwner, bestChar, bestScore
 
+    local holsterStarted = os.clock()
     for owner, folder in pairs(index.owners) do
         local holster = findHolsterUnder(folder)
         if holster then
@@ -557,11 +623,14 @@ local function scanForBomb()
         end
     end
 
+    record("holster", holsterStarted)
+
     if bestHolster then
         rememberHolster(bestHolster)
         -- Only a living owner counts as "carried". A dead or unknown owner means
         -- the folder is left over and the bomb has been dropped.
         if bestScore >= 2 then
+            record("scan", scanStarted)
             return bestHolster, bestOwner, bestChar
         end
     else
@@ -574,11 +643,13 @@ local function scanForBomb()
     -- 2. The instance we already know about, still parented somewhere. This
     --    covers a plain reparent, including a rename.
     if stickyHolster and stickyHolster.Parent then
+        record("scan", scanStarted)
         return stickyHolster, nil, nil
     end
     stickyHolster = nil
 
     -- 3. Name match. Kept, but demoted: the name is not stable across a drop.
+    local nameStarted = os.clock()
     local byName = nil
 
     local function scanByName(node, depth)
@@ -603,18 +674,25 @@ local function scanForBomb()
     end)
 
     if byName then
+        record("name", nameStarted)
+        record("scan", scanStarted)
         rememberHolster(byName)
         return byName, nil, nil
     end
+    record("name", nameStarted)
 
     -- 4. Shape match. This is what actually finds a dropped or planted bomb,
     --    because by then the model has been replaced and renamed.
+    local shapeStarted = os.clock()
     local byShape = findBombByShape(Workspace, 6)
+    record("shape", shapeStarted)
     if byShape then
+        record("scan", scanStarted)
         rememberHolster(byShape)
         return byShape, nil, nil
     end
 
+    record("scan", scanStarted)
     return nil, nil, nil
 end
 
@@ -1410,7 +1488,14 @@ function C4ESP.init(Config)
     storedConfig = Config
 
     C4ESP.Connection = RunService.RenderStepped:Connect(function()
-        pcall(update)
+        local started = os.clock()
+        local timed = rawget(_G, "__bloxstrikeTimed")
+        if timed then
+            timed("C4ESP", update)
+        else
+            pcall(update)
+        end
+        record("draw", started)
     end)
 end
 

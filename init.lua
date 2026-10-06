@@ -235,8 +235,103 @@ reportInit("UIManager", function()
     UIManager.init(Config, Arvn, WeaponEngine, cleanup, HitSound)
 end)
 
+-- ==========================================================
+-- Frame profiler
+-- ==========================================================
+--
+-- The C4 pickup hitch has now survived two fixes that were both made by reading the
+-- code, and both were aimed at tree walks that measurement shows are cheap. So
+-- nothing else gets changed until the time is actually attributed.
+--
+-- The distinction that matters is not "which module is slow" but "are WE slow at
+-- all". A frame can take 80ms while every module in this cheat totals 3ms, and that
+-- is the game replicating the bomb model - a different problem with a different fix,
+-- and one that no amount of walk-throttling would help. So the frame delta is
+-- recorded alongside the sum of our own work; when the two diverge, the hitch is not
+-- ours and further "optimising" the cheat is the wrong move.
+--
+-- max is reported rather than average. A hitch is one bad frame, and a module that
+-- is free for 59 frames and costs 40ms once averages to nothing.
+local perf = { buckets = {}, frameMax = 0, frameSum = 0, frameN = 0, oursMax = 0 }
+
+local function timed(name, fn, ...)
+    local started = os.clock()
+    local a, b, c = fn(...)
+    local dt = os.clock() - started
+    local e = perf.buckets[name]
+    if not e then e = { t = 0, n = 0, max = 0 }; perf.buckets[name] = e end
+    e.t = e.t + dt
+    e.n = e.n + 1
+    if dt > e.max then e.max = dt end
+    return a, b, c
+end
+
+local function fmtMs(s) return string.format("%.1f", s * 1000) end
+
+-- C4ESP runs from its own RenderStepped connection, not from the loop below, so it
+-- needs the profiler exposed rather than wrapped at the call site.
+_G.__bloxstrikeTimed = timed
+
+local perfReportAt = -999
+local perfConnection = nil
+
+local function reportPerf(forceFrame)
+    local names = {}
+    for name in pairs(perf.buckets) do names[#names + 1] = name end
+    table.sort(names)
+
+    local parts = {}
+    local oursMax = 0
+    for _, name in ipairs(names) do
+        local e = perf.buckets[name]
+        if e.max > oursMax then oursMax = e.max end
+        parts[#parts + 1] = string.format("%s max=%s", name, fmtMs(e.max))
+    end
+
+    local frameAvg = 0
+    if perf.frameN > 0 then frameAvg = perf.frameSum / perf.frameN end
+
+    local line = string.format(
+        "PERF frame max=%s avg=%s | ours max=%s | %s",
+        fmtMs(perf.frameMax), fmtMs(frameAvg), fmtMs(oursMax),
+        table.concat(parts, "  "))
+
+    local c4 = nil
+    pcall(function() c4 = C4ESP.TakeStats() end)
+    if c4 and #c4 > 0 then line = line .. " || C4: " .. c4 end
+
+    pcall(warn, "[Bloxstrike] " .. line)
+
+    if forceFrame and perf.frameMax > (oursMax * 2) and perf.frameMax > 0.02 then
+        -- The gap between the frame and our own work is the useful number: it says
+        -- how much of the hitch this cheat is even responsible for.
+        pcall(warn, string.format(
+            "[Bloxstrike] frame %.1fms vs ours %.1fms -> %.0f%% is NOT us",
+            perf.frameMax * 1000, oursMax * 1000,
+            (1 - (oursMax / math.max(perf.frameMax, 1e-6))) * 100))
+    end
+
+    perf.buckets = {}
+    perf.frameMax = 0
+    perf.frameSum = 0
+    perf.frameN = 0
+end
+
 -- render loop
 renderConn = RunService.RenderStepped:Connect(function(dt)
+    perf.frameMax = math.max(perf.frameMax, dt)
+    perf.frameSum = perf.frameSum + dt
+    perf.frameN = perf.frameN + 1
+
+    local now = os.clock()
+    if (now - perfReportAt) >= 1.0 then
+        perfReportAt = now
+        -- Reported off the render path is impossible, so this is a deferred call:
+        -- doing the formatting inline would charge our own reporting to the very
+        -- frame being measured.
+        task.defer(reportPerf)
+    end
+
     local vpCenter = Camera.ViewportSize * 0.5
     fovCircle.Position = Vector2.new(vpCenter.X, vpCenter.Y)
 
@@ -255,9 +350,9 @@ renderConn = RunService.RenderStepped:Connect(function(dt)
     fovCircle.Transparency = Config.FOV_CIRCLE_TRANSPARENCY
     fovCircle.Visible = (Config.FOV_CIRCLE_ENABLED ~= false) and (Config.ESP_ENABLED ~= false)
 
-    TargetEngine.update(Config, Utils, DamageEngine)
-    ESPManager.update(Config, Utils, SkeletonRenderer)
-    SpectateChecker.update(Config)
+    timed("TargetEngine", TargetEngine.update, Config, Utils, DamageEngine)
+    timed("ESPManager", ESPManager.update, Config, Utils, SkeletonRenderer)
+    timed("SpectateChecker", SpectateChecker.update, Config)
 end)
 
 -- unload key listener
